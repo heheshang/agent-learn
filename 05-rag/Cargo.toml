@@ -1,0 +1,29 @@
+[package]
+name = "rag-05"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+
+# ── 复用 Part 1（加载 + 分割）────────────────────────────────────────
+rag-04 = { path = "../04-rag" }
+
+# ── 向量化 (Embeddings) ────────────────────────────────────────────
+# fastembed：在本地用 ONNX 跑 sentence-transformers 模型，
+# 不需要 Python、不需要 API key。对应教程里的 Sentence Transformers。
+fastembed = { workspace = true }
+
+# ── 向量存储 (Vector Stores) ───────────────────────────────────────
+# FAISS：Facebook 的向量检索引擎，本地内存索引 + 文件持久化。
+# 对应教程里的 FAISS Intro。
+faiss = { workspace = true }
+
+# Chroma：带元数据过滤 + 持久化服务的向量库。
+# 对应教程里的 Chroma。
+chromadb = { workspace = true }
+reqwest = { workspace = true }

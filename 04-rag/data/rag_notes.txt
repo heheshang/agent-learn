@@ -1,0 +1,40 @@
+Retrieval-Augmented Generation Engineering Notes
+
+This document is a plain-text PDF used to exercise the PDF loading path.
+It contains no scanned images and no complex layout, so pure text extraction
+is sufficient.
+
+Section 1. Why chunking matters
+
+Retrieval quality is dominated by chunk granularity. Chunks that are too large
+mix several topics into one vector and dilute the semantic signal. Chunks that
+are too small fragment the answer and leave the language model without enough
+context to compose a coherent reply.
+
+Section 2. Chunk size guidance
+
+A practical default is three hundred to five hundred tokens per chunk, with an
+overlap of ten to twenty percent of the chunk size. The overlap exists so that
+a sentence landing exactly on a cut boundary still appears whole in one of the
+adjacent chunks.
+
+Section 3. Structure aware chunking
+
+Documents that carry explicit structure, such as Markdown headings or PDF
+chapter titles, give you free semantic boundaries. Prefer splitting on those
+boundaries over splitting on arbitrary character counts, because the author of
+the document already told you where the topics change.
+
+Section 4. Metadata and citations
+
+Every chunk should record its source file, its heading path, and its ordinal
+position. The heading path is the single most valuable piece of metadata: two
+sentences with identical wording mean different things in different chapters.
+Prefixing the heading path onto the chunk text measurably improves recall.
+
+Section 5. Evaluation pitfalls
+
+Evaluating a retrieval pipeline requires held out questions whose answers are
+not literally present in the corpus. If the answer appears verbatim in the
+document, recall metrics become meaningless because the retriever can match on
+surface form alone rather than on meaning.

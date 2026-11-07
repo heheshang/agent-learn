@@ -1,0 +1,37 @@
+[package]
+name = "rag-06"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+
+# ── HTTP API 层 ──────────────────────────────────────────────────────
+# axum：Web 框架。本项目用它实现「文档问答 API」。
+#
+# ⚠️ 为什么不是 FastAPI：FastAPI 是 Python 生态的框架，而本仓库
+# （01~05 模块）全部是 Rust 技术栈。01-axum 已经把 axum 的路由/处理器/
+# 状态/错误模式讲清楚了，06-rag 复用同一套模式，保持整个仓库的一致性。
+# 架构上是等价的：路由 → 处理器 → 状态 → 统一错误响应。
+axum = { workspace = true }
+
+# 请求体大小限制 + 超时。
+tower-http = { workspace = true }
+
+# ── LLM 层 ──────────────────────────────────────────────────────────
+# genai：多厂商 LLM 客户端。复用 03-genai 的依赖（AgentPrism fork）。
+genai = { workspace = true }
+
+# ── 复用 Part 1/2 ───────────────────────────────────────────────────
+# Part 1：文档加载 + 文本分块（Loader / Splitter）。
+rag-04 = { path = "../04-rag" }
+
+# Part 2：向量化 + 向量存储（Embedder / VectorStore）。
+rag-05 = { path = "../05-rag" }
+
+[dev-dependencies]
+tempfile = { workspace = true }

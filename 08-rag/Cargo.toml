@@ -1,0 +1,58 @@
+[package]
+name = "rag-08"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+
+# ── HTTP API 层 ──────────────────────────────────────────────────────
+# 与 06 / 07 保持同一套模式：路由 → 处理器 → 状态 → 统一错误响应。
+axum = { workspace = true }
+tower-http = { workspace = true }
+
+# ── LLM 层 ──────────────────────────────────────────────────────────
+genai = { workspace = true }
+
+# ── Reranker 层 ─────────────────────────────────────────────────────
+# fastembed 除了做 embedding，还内置了 cross-encoder reranker
+# （`TextRerank`）—— 正好对应教程里的 Cohere Rerank 角色，
+# 但完全本地跑，不需要 API key。
+fastembed = { workspace = true }
+
+# Cohere Rerank 的 HTTP 客户端（可选后端）。
+reqwest = { workspace = true }
+
+# ── 复用 Part 1 ─────────────────────────────────────────────────────
+# Part 1：文档加载 + 文本分块。
+rag-04 = { path = "../04-rag" }
+
+# ── 复用 Part 2 ─────────────────────────────────────────────────────
+# Part 2：向量化 + 向量存储。本项目要自己实现检索层，
+# 所以直接依赖（而不是通过 rag-06 间接拿）。
+rag-05 = { path = "../05-rag" }
+
+# ── 复用 Part 3 ─────────────────────────────────────────────────────
+# Part 3：完整 Naive RAG。
+#
+# 复用：
+# - `rag_06::prompt`    —— Prompt 组装（格式与前几个项目保持一致）
+# - `rag_06::config`   —— `EmbeddingModel` / `GenerationConfig`
+# - `rag_06::retrieval`—— `RetrievedChunk` 类型
+rag-06 = { path = "../06-rag" }
+
+# ── 复用 Part 4 ─────────────────────────────────────────────────────
+# Part 4：Query Transformation。
+#
+# 复用：
+# - `rag_07::fusion::RRF_K` —— RRF 的常数 k（和 07 保持一致）
+# - `rag_07::llm`          —— `Llm` trait + `GenaiLlm` + `ScriptedLlm`
+#                             （测试里用 ScriptedLlm，零网络、零延迟、完全确定）
+rag-07 = { path = "../07-query" }
+
+[dev-dependencies]
+tempfile = { workspace = true }

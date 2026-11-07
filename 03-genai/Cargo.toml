@@ -1,0 +1,11 @@
+[package]
+name = "genai-03"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = { workspace = true }
+genai = { workspace = true }
+rust-genai-agent = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }

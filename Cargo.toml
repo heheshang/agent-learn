@@ -1,0 +1,87 @@
+[workspace]
+resolver = "3"
+members = ["01-axum", "02-rig", "03-genai", "04-rag", "05-rag", "06-rag", "07-query", "08-rag"]
+
+# 所有成员 crate 的依赖都在这里统一定义，成员用 `dep = { workspace = true }` 引用。
+# 版本与 feature 只在此处出现一处，避免各模块之间版本漂移。
+[workspace.dependencies]
+# ── 通用基础库 ───────────────────────────────────────────────────────
+anyhow = "1.0.104"
+thiserror = "2.0.17"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+tokio = { version = "1.54.1", features = ["full"] }
+
+# ── 01-axum / 06-rag ───────────────────────────────────────────────
+# `macros` feature 提供 `#[axum::debug_handler]` —— 写 handler 时它能
+# 在编译期给出精确的 trait bound 诊断（哪个 future 不是 Send），
+# 否则 axum 只会报一句笼统的「Handler trait 未实现」。
+axum = { version = "0.8.9", features = ["macros"] }
+
+# ── 02-rig ──────────────────────────────────────────────────────────
+rig = "0.46"
+
+# ── 03-genai ────────────────────────────────────────────────────────
+# `rust-genai-agent` 依赖的是 AgentPrism fork 的 genai（lib 名仍叫 `genai`）。
+# 必须与它指向同一个包，否则 `genai::` 类型与 agent crate 的类型不互通。
+genai = { version = "=0.7.0-beta.19.1-agentprism", package = "genai-agentprism" }
+rust-genai-agent = "0.2.0"
+
+# ── 04-rag ──────────────────────────────────────────────────────────
+# Docling：Rust 版 docling，结构感知解析（PDF/HTML/DOCX → DoclingDocument），
+# 自带 heading-aware chunker。这是本项目的主 loader。
+#
+# `pdf-text` 只抽文本层，不做版面分析 —— 快、零额外模型依赖，
+# 但标题不会变成 `#`。
+# 想要标题层级（PDF → `## Section 1 ...`），在 04-rag 里启用 layout feature：
+#   cargo run --features layout
+# 它会打开 docling 的完整 PDF ML 管线（ONNX runtime），
+# 并需要额外下载版面模型（见 04-rag/README.md「可选：版面分析」）。
+docling = { version = "2.67", default-features = false, features = [
+    "chunking",
+    "pdf-text",
+] }
+
+# 纯 Rust 的 PDF 文本抽取，作为「无依赖基线」对照实现。
+pdf-extract = "0.12"
+
+# Markdown 解析：自己实现结构感知分块时用。
+pulldown-cmark = "0.13"
+
+# 通用字符/词级递归分块器（LlamaIndex SentenceSplitter 的对应物）。
+text-splitter = { version = "0.33", features = ["markdown", "tiktoken-rs"] }
+
+# Token 精确计数：用真实 tokenizer 而不是估算字符数。
+tiktoken-rs = "0.12"
+
+# ── 05-rag ──────────────────────────────────────────────────────────
+# fastembed：本地 ONNX 推理引擎，跑 sentence-transformers 系的嵌入模型。
+# 优势：无 Python 依赖、无 API key、模型自动下载到本地缓存。
+#
+# ⚠️ 版本锁定在 4.x：rig 0.46 依赖的 `rig-fastembed` 需要 fastembed ^4.5，
+# 而 fastembed 5+ 依赖 `ort =2.0.0-rc.15`，4.x 依赖 `ort =2.0.0-rc.9`。
+# 两个版本在同一个 workspace 里会冲突（ort 用的是精确版本约束）。
+fastembed = "4.9.1"
+
+# FAISS：Facebook AI Similarity Search，Rust 绑定。
+# 默认走动态链接 —— 需要系统装好 libfaiss_c（macOS: `brew install faiss`）。
+# 静态链接（features = ["static"]）会在编译期用 cmake 源码构建 FAISS，
+# 需要 cmake + OpenMP + BLAS，构建非常慢。
+faiss = "0.13.0"
+
+# Chroma 的 Rust HTTP 客户端。
+chromadb = "2.3.0"
+
+# 直接调 Chroma 的 HTTP API —— `chromadb` crate 的 `create_collection`
+# 还不支持 `configuration` 参数（没法指定距离空间），只能自己发请求。
+reqwest = { version = "0.11", default-features = false, features = ["json", "rustls-tls"] }
+
+# ── 06-rag ──────────────────────────────────────────────────────────
+# tower-http：axum 的中间件生态（请求体大小限制、超时、追踪）。
+# `timeout` feature 提供 `TimeoutLayer` —— 给 LLM 调用加超时必须有，
+# 否则 DeepSeek 挂起会让整个 HTTP 请求一直挂着。
+tower-http = { version = "0.6", features = ["timeout", "limit", "trace"] }
+
+# 临时目录：测试里造知识库用。
+tempfile = "3.23"
+

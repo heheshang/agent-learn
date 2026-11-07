@@ -1,0 +1,19 @@
+[package]
+name = "rag-04"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+# ── 文档加载 (Loaders) ───────────────────────────────────────────────
+docling = { workspace = true }
+pdf-extract = { workspace = true }
+pulldown-cmark = { workspace = true }
+
+# ── 文本分块 (Splitters) ────────────────────────────────────────────
+text-splitter = { workspace = true }
+tiktoken-rs = { workspace = true }

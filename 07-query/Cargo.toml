@@ -1,0 +1,50 @@
+[package]
+name = "rag-07"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+
+# ── HTTP API 层 ──────────────────────────────────────────────────────
+# 与 06-rag 保持同一套模式：路由 → 处理器 → 状态 → 统一错误响应。
+axum = { workspace = true }
+
+# 请求体大小限制 + 超时（LLM 调用可能挂起，必须有超时）。
+tower-http = { workspace = true }
+
+# ── LLM 层 ──────────────────────────────────────────────────────────
+# genai：多厂商 LLM 客户端。查询改写本质上就是「让 LLM 换个说法」。
+genai = { workspace = true }
+
+# ── 复用 Part 1 ─────────────────────────────────────────────────────
+# Part 1：文档加载 + 文本分块。
+rag-04 = { path = "../04-rag" }
+
+# ── 复用 Part 2 ─────────────────────────────────────────────────────
+# Part 2：向量化 + 向量存储。
+#
+# 需要直接依赖（而不是通过 rag-06 间接拿），因为本项目要自己实现检索层 ——
+# 06 的 `Retriever` 只会用「问题方式」嵌入，而 HyDE 必须用「文档方式」嵌入。
+rag-05 = { path = "../05-rag" }
+
+# ── 复用 Part 3 ─────────────────────────────────────────────────────
+# Part 3：完整 Naive RAG。本项目在它之上加一层「查询改写」。
+#
+# 复用它的四个部分：
+# - `rag_06::index`     —— 索引构建 / 加载（省掉重复实现）
+# - `rag_06::retrieval` —— `RetrievedChunk` 类型（跨 crate 统一的命中块表示）
+# - `rag_06::prompt`    —— Prompt 组装（和 06 的格式保持一致，便于对比）
+# - `rag_06::generation`—— 生成器 + 引用抽取
+#
+# ⚠️ 但**检索器不复用** —— 06 的 `Retriever` 只会用「问题方式」嵌入，
+# 而 HyDE 需要用「文档方式」嵌入（passage 前缀）。
+# 这个差异是 HyDE 生效的前提，所以 07 必须有自己的检索层。
+rag-06 = { path = "../06-rag" }
+
+[dev-dependencies]
+tempfile = { workspace = true }
