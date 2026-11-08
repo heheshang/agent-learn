@@ -1,0 +1,61 @@
+[package]
+name = "rag-12"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+
+# ── HTTP API 层 ──────────────────────────────────────────────────────
+# 与 06~11 保持同一套模式：路由 → 处理器 → 状态 → 统一错误响应。
+axum = { workspace = true }
+tower-http = { workspace = true }
+
+# tower：测试里用 `ServiceExt::oneshot` 直接调 axum 路由。
+tower = { workspace = true }
+
+# ── Milvus 官方 Rust SDK ─────────────────────────────────────────────
+# v2 API（ClientV2 + request/response builder）。
+# 本项目要用到服务端混合检索（hybrid_search + RRF）和
+# 服务端 BM25（EmbeddedText 稀疏向量检索）。
+milvus-sdk-rust = { workspace = true }
+
+# ── 复用 Part 1（加载 + 分割）────────────────────────────────────────
+rag-04 = { path = "../04-rag" }
+
+# ── 复用 Part 2（向量化 + 向量存储抽象）─────────────────────────────
+rag-05 = { path = "../05-rag" }
+
+# ── 复用 Part 3（Prompt 组装 + 生成配置）────────────────────────────
+rag-06 = { path = "../06-rag" }
+
+# ── 复用 Part 4（查询改写 + LLM 抽象 + RRF 常数）────────────────────
+# - `rag_07::transform` —— MultiQuery / HyDE 等改写策略
+# - `rag_07::fusion`   —— `RRF_K` 常数
+# - `rag_07::llm`      —— `Llm` trait + `GenaiLlm` + `ScriptedLlm`
+rag-07 = { path = "../07-query" }
+
+# ── 复用 Part 5（混合检索 + 重排）──────────────────────────────────
+# 本项目的「检索 + 精排」内核：
+# - `rag_08::reranker` —— `Reranker` trait + `LocalCrossEncoder` + `KeywordReranker`
+# - `rag_08::tokenize` —— 中英混排分词（客户端 BM25 回退路径用）
+rag-08 = { path = "../08-rag" }
+
+# ── 复用 Part 6（评估框架）──────────────────────────────────────────
+# - `rag_09::dataset` —— `EvalDataset` / `EvalCase` / `ChunkIndex`
+# - `rag_09::metrics` —— `MetricRegistry` / `EvalContext` / 各指标
+# - `rag_09::report`  —— `Evaluator` / `EvalReport` / `ComparisonReport`
+rag-09 = { path = "../09-rag-eval" }
+
+# ── 复用 Part 7（生产向量库）────────────────────────────────────────
+# - `rag_10::milvus_store` —— `MilvusStore`（服务端 hybrid_search / BM25）
+# - `rag_10::schema`       —— `ChunkRecord` / `stable_pk`
+# - `rag_10::config`       —— `MilvusConfig` / `MetricKind`
+rag-10 = { path = "../10-rag-milvus" }
+
+[dev-dependencies]
+tempfile = { workspace = true }

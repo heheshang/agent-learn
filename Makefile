@@ -11,15 +11,18 @@
 # ============================================================================
 
 CARGO := cargo
-PKGS  := axum-01 rig-02 genai-03 rag-04 rag-05 rag-06 rag-07 rag-08
+PKGS  := axum-01 rig-02 genai-03 rag-04 rag-05 rag-06 rag-07 rag-08 rag-09 rag-10 rag-11 rag-12
 
 .DEFAULT_GOAL := help
 .PHONY: help build run test check fmt fmt-check lint clean \
-        01 02 03 04 05 06 07 08 \
+        01 02 03 04 05 06 07 08 09 10 11 12 \
         axum rig genai rag \
-        serve-06 serve-07 serve-08 \
-        demo-04 demo-05 demo-06 demo-07 demo-08 \
-        compare-07 compare-08 \
+        serve-06 serve-07 serve-08 serve-09 serve-10 serve-11 serve-12 \
+        demo-04 demo-05 demo-06 demo-07 demo-08 demo-09 demo-10 demo-11 demo-12 \
+        compare-07 compare-08 compare-09 compare-10 compare-11 compare-12 \
+        eval-12 \
+        milvus-up milvus-down milvus-destroy \
+        check-mermaid \
         deps faiss chroma
 
 help: ## 显示本文件的所有目标
@@ -78,6 +81,18 @@ clean: ## 清理构建产物
 08: ## 08-rag：端到端 demo
 	$(MAKE) -C 08-rag demo
 
+09: ## 09-rag-eval：端到端 demo
+	$(MAKE) -C 09-rag-eval demo
+
+10: ## 10-rag-milvus：端到端 demo
+	$(MAKE) -C 10-rag-milvus demo
+
+11: ## 11-rag-advance：端到端 demo
+	$(MAKE) -C 11-rag-advance demo
+
+12: ## 12-rag-summary：端到端 demo
+	$(MAKE) -C 12-rag-summary demo
+
 axum: 01 ## 别名
 rig: 02 ## 别名
 genai: 03 ## 别名
@@ -93,6 +108,18 @@ serve-07: ## 启动 07-query 服务（:3010）
 
 serve-08: ## 启动 08-rag 服务（:3020）
 	$(MAKE) -C 08-rag serve
+
+serve-09: ## 启动 09-rag-eval 服务（:3030）
+	$(MAKE) -C 09-rag-eval serve
+
+serve-10: ## 启动 10-rag-milvus 服务（:3030）
+	$(MAKE) -C 10-rag-milvus serve
+
+serve-11: ## 启动 11-rag-advance 服务（:3040）
+	$(MAKE) -C 11-rag-advance serve
+
+serve-12: ## 启动 12-rag-summary 服务（:3050）
+	$(MAKE) -C 12-rag-summary serve
 
 ## ── Demo ────────────────────────────────────────────────────────────────
 
@@ -111,16 +138,57 @@ demo-07: ## 07-query：查询改写
 demo-08: ## 08-rag：混合检索 + 重排
 	$(MAKE) -C 08-rag demo
 
+demo-09: ## 09-rag-eval：评估 + 对比
+	$(MAKE) -C 09-rag-eval demo
+
+demo-10: ## 10-rag-milvus：灌数据 + 检索
+	$(MAKE) -C 10-rag-milvus demo
+
+demo-11: ## 11-rag-advance：解析复杂文档
+	$(MAKE) -C 11-rag-advance demo
+
+demo-12: ## 12-rag-summary：摘要式问答
+	$(MAKE) -C 12-rag-summary demo
+
 compare-07: ## 07-query：多策略改写对比 ★
 	$(MAKE) -C 07-query compare
 
 compare-08: ## 08-rag：多模式检索对比 ★
 	$(MAKE) -C 08-rag compare
 
+compare-09: ## 09-rag-eval：优化前后对比 ★
+	$(MAKE) -C 09-rag-eval compare
+
+compare-10: ## 10-rag-milvus：Milvus vs Qdrant 同题对照 ★
+	$(MAKE) -C 10-rag-milvus compare
+
+compare-11: ## 11-rag-advance：几何还原 vs 压平对照 ★
+	$(MAKE) -C 11-rag-advance compare
+
+compare-12: ## 12-rag-summary：五档消融阶梯同题对照 ★
+	$(MAKE) -C 12-rag-summary compare
+
+eval-12: ## 12-rag-summary：跑评估集出消融报告 ★
+	$(MAKE) -C 12-rag-summary eval
+
+## ── Milvus 容器 ────────────────────────────────────────────────────────
+
+milvus-up: ## 启动 Milvus standalone（etcd + minio + milvus）
+	$(MAKE) -C 10-rag-milvus up
+
+milvus-down: ## 停止 Milvus（保留数据卷）
+	$(MAKE) -C 10-rag-milvus down
+
+milvus-destroy: ## 停止并删除 Milvus 数据卷
+	$(MAKE) -C 10-rag-milvus down-v
+
 ## ── 系统依赖 ────────────────────────────────────────────────────────────
 
+check-mermaid: ## 校验所有 README 的 mermaid 图能正常渲染
+	@bash scripts/check-mermaid.sh
+
 deps: ## 检查系统依赖
-	@echo "==> FAISS (05/06/07/08 需要)"; $(MAKE) -C 05-rag deps
+	@echo "==> FAISS (05/06/07/08/09 需要)"; $(MAKE) -C 05-rag deps
 
 faiss: ## 安装 FAISS（macOS）
 	brew install faiss

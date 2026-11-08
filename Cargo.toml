@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["01-axum", "02-rig", "03-genai", "04-rag", "05-rag", "06-rag", "07-query", "08-rag"]
+members = ["01-axum", "02-rig", "03-genai", "04-rag", "05-rag", "06-rag", "07-query", "08-rag", "09-rag-eval", "10-rag-milvus", "11-rag-advance", "12-rag-summary"]
 
 # 所有成员 crate 的依赖都在这里统一定义，成员用 `dep = { workspace = true }` 引用。
 # 版本与 feature 只在此处出现一处，避免各模块之间版本漂移。
@@ -77,11 +77,56 @@ chromadb = "2.3.0"
 reqwest = { version = "0.11", default-features = false, features = ["json", "rustls-tls"] }
 
 # ── 06-rag ──────────────────────────────────────────────────────────
-# tower-http：axum 的中间件生态（请求体大小限制、超时、追踪）。
+# tower-http：axum 的中间件生态（请求体大小限制、超时、追踪、CORS）。
 # `timeout` feature 提供 `TimeoutLayer` —— 给 LLM 调用加超时必须有，
 # 否则 DeepSeek 挂起会让整个 HTTP 请求一直挂着。
-tower-http = { version = "0.6", features = ["timeout", "limit", "trace"] }
+# `cors` feature 提供 `CorsLayer` —— 前后端分离部署时需要。
+tower-http = { version = "0.6", features = ["timeout", "limit", "trace", "cors"] }
 
 # 临时目录：测试里造知识库用。
 tempfile = "3.23"
+
+# ── 10-rag-milvus ───────────────────────────────────────────────────
+# tower：`ServiceExt::oneshot` —— 集成测试里直接调 axum 路由，
+# 不必真起一个 HTTP 服务器。
+tower = { version = "0.5", features = ["util"] }
+
+# Milvus 官方 Rust SDK。v2 API（ClientV2 + request/response builder）是
+# 当前主线，v1 仅作兼容保留 —— 新代码一律用 v2。
+#
+# ⚠️ 它内部用 `tonic 0.13` + `prost 0.13`，且 build.rs 依赖
+#    `protoc-bin-vendored`（自带 protoc，不用系统装）。
+milvus-sdk-rust = "3.0.3"
+
+# Qdrant 官方 Rust SDK（Milvus 的横向对照对象）。
+# 同样 gRPC + HNSW + payload 过滤 + 混合检索。
+qdrant-client = "1.20.0"
+
+# SHA-1：只用来派生 UUIDv5（Qdrant 的 point id 必须是整数或 UUID）。
+# 这里不是拿它做安全用途 —— 是借用它「确定性哈希」这一个性质。
+sha1 = "0.10"
+
+# ── 11-rag-advance ──────────────────────────────────────────────────
+# docling-pdf：docling 的 PDF 后端，单独引一份是为了直接用它的
+# **文本层几何**（每个词/行/单元格的坐标框）。
+#
+# 完整 ML 管线（版面分析 + TableFormer + OCR）要跑 ONNX，
+# 且 docling-onnx 要求 `ort =2.0.0-rc.14`，而 fastembed 4.9.1
+# 锁的是 `ort =2.0.0-rc.9`（精确版本约束）—— 两者同 workspace 会冲突。
+#
+# 所以本项目走**纯几何路线**：不跑模型，用坐标把表格/图片还原出来。
+# `ocr-prep` feature 只开 `dep:image`（不引入 ort），代价极小。
+docling-pdf = { version = "2.67.1", default-features = false, features = ["ocr-prep"] }
+
+# lopdf：纯 Rust 的 PDF 对象模型。用来直接读 PDF 里的图片 XObject
+# （docling 的文本层路径不吐图片）。
+#
+# ⚠️ 版本要和 docling-pdf 对齐（0.45），否则 workspace 里会有两份 lopdf。
+lopdf = { version = "0.45", default-features = false }
+
+# PNG 编码：把 PDF 里的位图转成 PNG 落盘。
+png = "0.17"
+
+# base64：把图片编码成 data URL，喂给支持多模态的 LLM。
+base64 = "0.22"
 
