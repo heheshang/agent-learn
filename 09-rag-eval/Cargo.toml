@@ -1,0 +1,49 @@
+[package]
+name = "rag-09"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+agent-logging = { path = "../00-logging" }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+
+# ── HTTP API 层 ──────────────────────────────────────────────────────
+# 与 06/07/08 保持同一套模式：路由 → 处理器 → 状态 → 统一错误响应。
+axum = { workspace = true }
+tower-http = { workspace = true }
+
+# ── 复用 Part 1（加载 + 分割）──────────────────────────────────────
+# 用来重建「语料块 → 标题路径」的映射 —— 评估集里的「相关章节」
+# 要被翻译成具体的块 ID，检索指标才有分母。
+rag-04 = { path = "../04-rag" }
+
+# ── 复用 Part 5（向量化）───────────────────────────────────────────
+# `Embedder` trait —— answer relevancy 指标要用它算「问题 vs 答案生成的问题」
+# 的语义相似度（这正是 RAGAs 官方实现的做法）。
+rag-05 = { path = "../05-rag" }
+
+# ── 复用 Part 3（Prompt 组装 + 生成配置）────────────────────────
+# - `rag_06::prompt`         —— Prompt 组装（格式与前几个项目保持一致）
+# - `rag_06::config`        —— `EmbeddingModel` / `GenerationConfig`
+rag-06 = { path = "../06-rag" }
+
+# ── 复用 Part 4（LLM 抽象层）──────────────────────────────────────
+# `Llm` trait + `GenaiLlm` + `ScriptedLlm`
+# - `GenaiLlm`：生产（真实模型调参 + LLM-as-a-judge）
+# - `ScriptedLlm`：测试（零网络、零延迟、完全确定）
+rag-07 = { path = "../07-query" }
+
+# ── 复用 Part 5（混合检索 + 重排）──────────────────────────────────
+# 本项目的「被评估系统」本体：
+# - `pipeline::HybridPipeline` —— 检索 → 重排 → 生成
+# - `hybrid::SearchMode`       —— vector / bm25 / hybrid
+# - `tokenize::tokenize`       —— 答案 token F1
+# - `index::ensure_index`      —— FAISS + BM25 双索引
+rag-08 = { path = "../08-rag" }
+
+[dev-dependencies]
+tempfile = { workspace = true }

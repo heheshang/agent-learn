@@ -1,0 +1,50 @@
+[package]
+name = "rag-10"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+agent-logging = { path = "../00-logging" }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+
+# ── HTTP API 层 ──────────────────────────────────────────────────────
+# 与 04~09 保持同一套模式：路由 → 处理器 → 状态 → 统一错误响应。
+axum = { workspace = true }
+tower-http = { workspace = true }
+
+# ── Milvus 官方 Rust SDK ─────────────────────────────────────────────
+# v2 API（ClientV2 + request/response builder）是当前主线；
+# v1 只保留兼容，新代码一律用 v2。
+milvus-sdk-rust = { workspace = true }
+
+# ── Qdrant 官方 Rust SDK（横向对照）───────────────────────────────────
+# Qdrant 是 Milvus 最直接的替代品：同样 gRPC、同样 HNSW、
+# 同样支持 payload 过滤 + 混合检索。放进来是为了做**同题对照**。
+qdrant-client = { workspace = true }
+
+# SHA-1：派生 UUIDv5（Qdrant point id 必须是整数或 UUID）。
+sha1 = { workspace = true }
+
+# tower：测试里用 `ServiceExt::oneshot` 直接调 axum 路由。
+tower = { workspace = true }
+
+# ── 复用 Part 1（加载 + 分割）────────────────────────────────────────
+rag-04 = { path = "../04-rag" }
+
+# ── 复用 Part 2（向量化 + 向量存储抽象）─────────────────────────────
+# `VectorStore` trait 是本项目的主轴：
+# FAISS / Chroma / Milvus / Qdrant 都实现同一个 trait，
+# 于是「换向量数据库」这件事变成一次**可运行、可对比**的实验。
+#
+# 复用：
+# - `rag_05::embed::{Embedder, LocalEmbedder, Model, EmbeddedChunk}`
+# - `rag_05::store::{VectorStore, SearchHit, StoreError}`
+# - `rag_05::pipeline::{build_chunks, IndexConfig, IndexBuild}`
+rag-05 = { path = "../05-rag" }
+
+[dev-dependencies]
+tempfile = { workspace = true }

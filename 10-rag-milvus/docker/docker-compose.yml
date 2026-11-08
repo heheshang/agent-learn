@@ -1,0 +1,108 @@
+# ============================================================================
+# Milvus Standalone —— 单机部署（学习 / 开发环境）
+#
+# 来源：https://milvus.io/docs/install_standalone-docker.md
+# 官方 compose：https://github.com/milvus-io/milvus/blob/master/deployments/docker/standalone/docker-compose.yml
+#
+# 三个容器各司其职：
+#
+#   etcd      —— 元数据存储（collection schema / segment 元信息 / 别名…）
+#   minio     —— 对象存储（真正的向量数据、索引文件落在这里）
+#   standalone —— Milvus 本体（查询引擎 + 索引构建 + 数据节点）
+#
+# ⚠️ 为什么不能用「一个容器」版本：
+#    Milvus Lite / milvusdb/milvus-standalone-embed 把 etcd/minio 塞进同一进程，
+#    适合嵌入式场景。这里用官方三容器版本，因为**生产级向量数据库**的
+#    每一个部件（存储/元数据/计算）都要能独立演进 —— 这正是要学的东西。
+#
+# 启动：docker compose up -d
+# 查看：docker compose ps
+# 日志：docker compose logs -f standalone
+# 停止：docker compose down
+# 清空数据：docker compose down -v
+# ============================================================================
+
+services:
+  etcd:
+    container_name: milvus-etcd
+    image: quay.io/coreos/etcd:v3.5.25
+    environment:
+      # 自动压缩：保留最近 1000 个历史版本，防止 etcd 无限膨胀
+      - ETCD_AUTO_COMPACTION_MODE=revision
+      - ETCD_AUTO_COMPACTION_RETENTION=1000
+      # 后端配额 4 GB —— 超过就拒绝写入，防止把磁盘写满
+      - ETCD_QUOTA_BACKEND_BYTES=4294967296
+      # 每 50000 次写入做一次快照
+      - ETCD_SNAPSHOT_COUNT=50000
+    volumes:
+      - ${DOCKER_VOLUME_DIRECTORY:-./volumes}/etcd:/etcd
+    command: etcd -advertise-client-urls=http://etcd:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  minio:
+    container_name: milvus-minio
+    image: milvusdb/minio:RELEASE.2024-12-18T13-15-44Z
+    environment:
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin
+    ports:
+      # 9000 = S3 API（Milvus 内部用它存数据）
+      - "9000:9000"
+      # 9001 = MinIO 控制台（浏览器打开 http://localhost:9001）
+      - "9001:9001"
+    volumes:
+      - ${DOCKER_VOLUME_DIRECTORY:-./volumes}/minio:/minio_data
+    command: minio server /minio_data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  standalone:
+    container_name: milvus-standalone
+    image: milvusdb/milvus:v3.0.5
+    command: ["milvus", "run", "standalone"]
+    security_opt:
+      # Milvus 需要 seccomp 权限才能创建大页/线程
+      - seccomp:unconfined
+    environment:
+      - MINIO_REGION=us-east-1
+      - ETCD_ENDPOINTS=etcd:2379
+      - MINIO_ADDRESS=minio:9000
+    volumes:
+      - ${DOCKER_VOLUME_DIRECTORY:-./volumes}/milvus:/var/lib/milvus
+    ports:
+      # 19530 = gRPC（SDK 连这个）
+      - "19530:19530"
+      # 9091 = 内部健康检查 / metrics
+      - "9091:9091"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+      interval: 30s
+      # 首次启动要建索引、加载模型，给足时间
+      start_period: 90s
+
+  # ── Qdrant（横向对照用）──────────────────────────────────────────────
+  # 本项目的核心产出之一是「Milvus ↔ Qdrant 同题对照」。
+  # 只有一个容器 —— 这正是 Qdrant 相对 Milvus 的部署优势。
+  #
+  # 6333 = REST API（浏览器 / curl 调试）
+  # 6334 = gRPC（Rust SDK 连这个 —— 注意 SDK 默认用 gRPC，不是 REST）
+  qdrant:
+    container_name: qdrant
+    image: qdrant/qdrant:v1.20.0
+    volumes:
+      - ${DOCKER_VOLUME_DIRECTORY:-./volumes}/qdrant:/qdrant/storage
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c ':> /dev/tcp/127.0.0.1/6333' || exit 1"]
+      interval: 30s
+      timeout: 20s
+      retries: 3

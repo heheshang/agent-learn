@@ -1,0 +1,225 @@
+{
+  "name": "kb-eval",
+  "cases": [
+    {
+      "id": "bm25-formula",
+      "question": "BM25 打分公式是什么",
+      "reference_answer": "BM25 的打分公式由三部分组成：逆文档频率 IDF、词频饱和项 f(t,D)·(k₁+1)、以及长度归一化项。IDF 的定义是 ln(1 + (N - df + 0.5) / (df + 0.5))。词频是饱和的，k₁ 经验值是 1.2；长度归一化参数 b 经验值是 0.75。",
+      "reference_contexts": [
+        "BM25 是最经典的稀疏检索算法，也是 Elasticsearch 和 Lucene 默认的打分函数。它的核心是三个部分：逆文档频率衡量词有多稀有，词频衡量词在文档中出现多少次，长度归一化防止长文档仅仅因为长就占优。"
+      ],
+      "relevant_chunk_ids": [],
+      "relevant_sections": ["BM25 打分算法"]
+    },
+    {
+      "id": "bm25-idf",
+      "question": "逆文档频率 IDF 是怎么算的",
+      "reference_answer": "逆文档频率的定义是 ln(1 + (N - df + 0.5) / (df + 0.5))。出现在所有文档里的词几乎没有区分度，逆文档频率趋近于零；只出现在一个文档里的词几乎是指针，逆文档频率最大。",
+      "reference_contexts": [
+        "逆文档频率的定义是 ln(1 + (N - df + 0.5) / (df + 0.5))。出现在所有文档里的词几乎没有区分度，逆文档频率趋近于零；只出现在一个文档里的词几乎是指针，逆文档频率最大。"
+      ],
+      "relevant_chunk_ids": [],
+      "relevant_sections": ["BM25 打分算法"]
+    },
+    {
+      "id": "bm25-params",
+      "question": "BM25 里的 k1 和 b 分别控制什么",
+      "reference_answer": "参数 k1 控制词频的饱和速度，经验值是 1.2。参数 b 控制长度惩罚的强度，经验值是 0.75。",
+      "reference_contexts": [
+        "BM25 的词频是饱和的：一个词出现十次比出现一次相关，但绝不可能相关十倍。参数 k1 控制这个饱和速度，经验值是 1.2。参数 b 控制长度惩罚的强度，经验值是 0.75。"
+      ],
+      "relevant_chunk_ids": [],
+      "relevant_sections": ["BM25 打分算法"]
+    },
+    {
+      "id": "hybrid-why",
+      "question": "为什么需要混合检索",
+      "reference_answer": "倒排索引擅长处理精确匹配，比如查找某个特定的错误码或者函数名。向量检索擅长处理语义模糊的情况，比如用户用一个完全不同的说法描述同一个概念。两者结合构成混合检索，用倒数排名融合把两路结果合并，因为两路的分数分布完全不同，不可直接比较，只有排名可以比较。",
+      "reference_contexts": [
+        "它与向量检索的思路正交。倒排索引擅长处理精确匹配，比如查找某个特定的错误码或者函数名。向量检索擅长处理语义模糊的情况，比如用户用一个完全不同的说法描述同一个概念。两者结合构成混合检索。"
+      ],
+      "relevant_chunk_ids": [],
+      "relevant_sections": ["倒排索引", "混合检索"]
+    },
+    {
+      "id": "rrf-why",
+      "question": "为什么不能把 BM25 分数和向量相似度直接加权求和",
+      "reference_answer": "因为两路的分数分布完全不同：余弦相似度通常在零点五到零点八五之间，而 BM25 分数是对数加权和，可能达到十几。所以不能直接加权求和，必须用倒数排名融合这种只看排名的方法。",
+      "reference_contexts": [
+        "两路的分数分布完全不同：余弦相似度通常在零点五到零点八五之间，而 BM25 分数是对数加权和，可能达到十几。所以不能直接加权求和，必须用倒数排名融合这种只看排名的方法。"
+      ],
+      "relevant_chunk_ids": [],
+      "relevant_sections": ["混合检索"]
+    },
+    {
+      "id": "rerank-two-stage",
+      "question": "重排为什么要分两阶段",
+      "reference_answer": "向量检索使用双编码器，问题和文档分别编码后比对距离，速度快但精度有限。重排使用交叉编码器，把问题和文档拼在一起送进模型，能看到两者的交互，因此更准，但每个候选都要跑一次模型，慢得多。所以标准做法是两阶段：先召回二十到五十条候选，再用重排模型精排成三到五条。",
+      "reference_contexts": [
+        "重排是混合检索之后的精排环节。向量检索使用双编码器，问题和文档分别编码后比对距离，速度快但精度有限。重排使用交叉编码器，把问题和文档拼在一起送进模型，能看到两者的交互，因此更准，但每个候选都要跑一次模型，慢得多。所以标准做法是两阶段：先召回二十到五十条候选，再用重排模型精排成三到五条。"
+      ],
+      "relevant_chunk_ids": [],
+      "relevant_sections": ["重排与交叉编码器"]
+    },
+    {
+      "id": "rerank-encoder-diff",
+      "question": "双编码器和交叉编码器有什么区别",
+      "reference_answer": "向量检索使用的是双编码器：问题和文档分别编码，编码时彼此看不见，只能比向量距离，所以速度快但精度有限。重排模型用的是交叉编码器：把问题和文档拼在一起送进模型，能看到交互，所以更准，但每个候选都要跑一次模型，慢得多。",
+      "reference_contexts": [
+        "重排是混合检索之后的精排环节。向量检索使用双编码器，问题和文档分别编码后比对距离，速度快但精度有限。重排使用交叉编码器，把问题和文档拼在一起送进模型，能看到两者的交互，因此更准。"
+      ],
+      "relevant_chunk_ids": [],
+      "relevant_sections": ["重排与交叉编码器"]
+    },
+    {
+      "id": "chunk-size",
+      "question": "文档切多大合适",
+      "reference_answer": "实际使用中常以 token 数量衡量块大小，常见区间是三百到五百 token，并保留相当于块大小百分之十到二十的重叠区域。块过大语义被稀释，块过小则割裂答案。",
+      "reference_contexts": [
+        "实际使用中常以 token 数量衡量块大小，常见区间是三百到五百 token，并保留相当于块大小百分之十到二十的重叠区域。重叠的作用是让落在切分边界上的句子仍然完整地出现在相邻的某一块中。"
+      ],
+      "relevant_chunk_ids": [],
+      "relevant_sections": ["文档分块"]
+    },
+    {
+      "id": "chunk-overlap",
+      "question": "块重叠有什么用",
+      "reference_answer": "重叠的作用是让落在切分边界上的句子仍然完整地出现在相邻的某一块中。",
+      "reference_contexts": [
+        "重叠的作用是让落在切分边界上的句子仍然完整地出现在相邻的某一块中。"
+      ],
+      "relevant_chunk_ids": [],
+      "relevant_sections": ["文档分块"]
+    },
+    {
+      "id": "embedding-asymmetric",
+      "question": "对称嵌入和非对称嵌入有什么区别",
+      "reference_answer": "对称模型对查询和文档使用相同的编码方式，适合摘要、聚类这类没有明确查询方向的场景。非对称模型为查询和文档分别训练不同的编码前缀，适用于检索场景，因为查询和文档在语义角色上本就不同。",
+      "reference_contexts": [
+        "嵌入模型分为对称和非对称两种。对称模型对查询和文档使用相同的编码方式，适合摘要、聚类这类没有明确查询方向的场景。非对称模型为查询和文档分别训练不同的编码前缀，适用于检索场景，因为查询和文档在语义角色上本就不同。"
+      ],
+      "relevant_chunk_ids": [],
+      "relevant_sections": ["向量嵌入"]
+    },
+    {
+      "id": "rag-why",
+      "question": "RAG 能解决大模型的哪些问题",
+      "reference_answer": "RAG 缓解了大语言模型的几个根本限制：模型的训练数据存在知识截止日期，之后发生的事情它一无所知，RAG 通过从外部知识库检索把最新信息补充进上下文。RAG 也缓解了幻觉问题 —— 模型在上下文里看到依据时，编造答案的概率会下降。另外 RAG 让知识可以低成本更新：不需要重新训练模型，只需要重建向量库。",
+      "reference_contexts": [
+        "RAG 缓解了大语言模型的几个根本限制。模型的训练数据存在知识截止日期，之后发生的事情它一无所知。RAG 通过从外部知识库检索，把最新信息补充进上下文。RAG 也缓解了幻觉问题 —— 模型在上下文里看到依据时，编造答案的概率会下降。另外 RAG 让知识可以低成本更新：不需要重新训练模型，只需要重建向量库。"
+      ],
+      "relevant_chunk_ids": [],
+      "relevant_sections": ["检索增强生成"]
+    },
+    {
+      "id": "photosynthesis-light",
+      "question": "光合作用的光反应发生在什么位置",
+      "reference_answer": "光反应阶段发生在类囊体膜上。光合色素吸收光子后，电子被激发到更高能级，随后沿着电子传递链传递，最终用于合成 ATP 和 NADPH。",
+      "reference_contexts": [
+        "光反应阶段发生在类囊体膜上，光合色素吸收光子后，电子被激发到更高能级，随后沿着电子传递链传递，最终用于合成 ATP 和 NADPH。"
+      ],
+      "relevant_chunk_ids": [],
+      "relevant_sections": ["光合作用"]
+    },
+    {
+      "id": "photosynthesis-dark",
+      "question": "暗反应在什么条件下进行",
+      "reference_answer": "暗反应阶段也就是卡尔文循环，发生在叶绿体基质中。这个阶段不直接需要光，而是利用光反应产生的 ATP 和 NADPH 来固定二氧化碳，合成有机物。",
+      "reference_contexts": [
+        "暗反应阶段也就是卡尔文循环，发生在叶绿体基质中。这个阶段不直接需要光，而是利用光反应产生的 ATP 和 NADPH 来固定二氧化碳，合成有机物。"
+      ],
+      "relevant_chunk_ids": [],
+      "relevant_sections": ["光合作用"]
+    },
+    {
+      "id": "db-index",
+      "question": "数据库索引为什么能加速查询",
+      "reference_answer": "在没有索引的情况下，查询需要全表扫描，复杂度是 O(n)。使用索引后，查找复杂度降为 O(log n)，但每次写入需要维护索引结构，带来额外的 I/O 开销。这正是数据库存在「写入放大」问题的原因。",
+      "reference_contexts": [
+        "在没有索引的情况下，查询需要全表扫描，复杂度是 O(n)。使用索引后，查找复杂度降为 O(log n)，但每次写入需要维护索引结构，带来额外的 I/O 开销。这正是数据库存在「写入放大」问题的原因。"
+      ],
+      "relevant_chunk_ids": [],
+      "relevant_sections": ["数据库索引原理"]
+    },
+    {
+      "id": "db-index-write",
+      "question": "用索引有什么代价",
+      "reference_answer": "使用索引后查找复杂度降为 O(log n)，但每次写入需要维护索引结构，带来额外的 I/O 开销。这正是数据库存在「写入放大」问题的原因。",
+      "reference_contexts": [
+        "每次写入需要维护索引结构，带来额外的 I/O 开销。这正是数据库存在「写入放大」问题的原因。"
+      ],
+      "relevant_chunk_ids": [],
+      "relevant_sections": ["数据库索引原理"]
+    },
+    {
+      "id": "tcp-handshake",
+      "question": "TCP 三次握手是为什么",
+      "reference_answer": "三次握手的原因是确保双方都能确认对方的发送能力和接收能力都正常。两次握手无法让服务端确认客户端的接收能力。",
+      "reference_contexts": [
+        "三次握手的原因是确保双方都能确认对方的发送能力和接收能力都正常。两次握手无法让服务端确认客户端的接收能力。"
+      ],
+      "relevant_chunk_ids": [],
+      "relevant_sections": ["TCP 三次握手"]
+    },
+    {
+      "id": "tcp-steps",
+      "question": "TCP 三次握手每一步做了什么",
+      "reference_answer": "第一次握手，客户端发送 SYN 报文，声明自己的初始序列号。第二次握手，服务端回复 SYN 加 ACK，声明自己的初始序列号并确认客户端的序列号。第三次握手，客户端发送 ACK，确认服务端的序列号。",
+      "reference_contexts": [
+        "TCP 建立连接需要三次握手。第一次握手，客户端发送 SYN 报文，声明自己的初始序列号。第二次握手，服务端回复 SYN 加 ACK，声明自己的初始序列号并确认客户端的序列号。第三次握手，客户端发送 ACK，确认服务端的序列号。"
+      ],
+      "relevant_chunk_ids": [],
+      "relevant_sections": ["TCP 三次握手"]
+    },
+    {
+      "id": "errno-econnrefused",
+      "question": "ECONNREFUSED 是什么意思",
+      "reference_answer": "ECONNREFUSED 表示目标端口没有进程监听，通常是服务没启动或者端口配错了。",
+      "reference_contexts": [
+        "ECONNREFUSED 表示目标端口没有进程监听，通常是服务没启动或者端口配错了。"
+      ],
+      "relevant_chunk_ids": [],
+      "relevant_sections": ["错误码速查"]
+    },
+    {
+      "id": "errno-enomem",
+      "question": "ENOMEM 是什么错误",
+      "reference_answer": "ENOMEM 表示内存分配失败。",
+      "reference_contexts": [
+        "ENOMEM 表示内存分配失败。"
+      ],
+      "relevant_chunk_ids": [],
+      "relevant_sections": ["错误码速查"]
+    },
+    {
+      "id": "http-404",
+      "question": "HTTP 404 是什么意思",
+      "reference_answer": "404 表示资源不存在。",
+      "reference_contexts": [
+        "常见的 HTTP 状态码含义如下。404 表示资源不存在。500 表示服务器内部错误。502 表示网关收到无效响应。503 表示服务暂时不可用。"
+      ],
+      "relevant_chunk_ids": [],
+      "relevant_sections": ["错误码速查"]
+    },
+    {
+      "id": "inverted-index",
+      "question": "什么是倒排索引",
+      "reference_answer": "倒排索引是从关键词到包含该关键词的文档列表的映射，是全文检索的基础数据结构。它与向量检索的思路正交。",
+      "reference_contexts": [
+        "倒排索引是从关键词到包含该关键词的文档列表的映射，是全文检索的基础数据结构。它与向量检索的思路正交。"
+      ],
+      "relevant_chunk_ids": [],
+      "relevant_sections": ["倒排索引"]
+    },
+    {
+      "id": "inverted-vs-vector",
+      "question": "倒排索引和向量检索各擅长什么",
+      "reference_answer": "倒排索引擅长处理精确匹配，比如查找某个特定的错误码或者函数名。向量检索擅长处理语义模糊的情况，比如用户用一个完全不同的说法描述同一个概念。",
+      "reference_contexts": [
+        "倒排索引擅长处理精确匹配，比如查找某个特定的错误码或者函数名。向量检索擅长处理语义模糊的情况，比如用户用一个完全不同的说法描述同一个概念。"
+      ],
+      "relevant_chunk_ids": [],
+      "relevant_sections": ["倒排索引"]
+    }
+  ]
+}

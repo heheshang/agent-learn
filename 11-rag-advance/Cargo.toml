@@ -1,0 +1,50 @@
+[package]
+name = "rag-11"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+agent-logging = { path = "../00-logging" }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+
+# ── HTTP API 层 ──────────────────────────────────────────────────────
+# 与 04~10 保持同一套模式：路由 → 处理器 → 状态 → 统一错误响应。
+axum = { workspace = true }
+tower-http = { workspace = true }
+
+# ── 文档解析 ─────────────────────────────────────────────────────────
+# docling：结构感知解析（PDF → 带层级的中间表示 → Markdown）。
+# 本项目用它做**对照基线**和 HTML 输入。
+docling = { workspace = true }
+
+# docling-pdf：docling 的 PDF 后端，单独引一份是为了直接用它的
+# **文本层几何**（每个词 / 行的坐标框）——
+# 表格还原、标题识别全都建立在这个几何之上。
+docling-pdf = { workspace = true }
+
+# lopdf：纯 Rust 的 PDF 对象模型。用来直接读 PDF 里的图片 XObject
+# （docling 的文本层路径不吐图片）。
+lopdf = { workspace = true }
+
+# PNG 编码：把 PDF 里的裸像素编码成 PNG 落盘。
+png = { workspace = true }
+
+# base64：把图片编码成 data URL，喂给支持多模态的 LLM。
+base64 = { workspace = true }
+
+# flate2：解压 PDF 图片流（FlateDecode）。
+flate2 = { version = "1.1", default-features = false, features = ["rust_backend"] }
+
+# 多模态模型客户端（复用 03-genai 的 genai）。
+genai = { workspace = true }
+
+# ── 复用 Part 1（分块基础设施）────────────────────────────────────────
+# `TokenCounter` —— 精确的 token 计数。
+rag-04 = { path = "../04-rag" }
+
+[dev-dependencies]
+tempfile = { workspace = true }
