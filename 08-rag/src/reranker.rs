@@ -57,6 +57,7 @@
 //!
 //! 两者实现同一个 [`Reranker`] trait，所以上层完全不感知差异。
 
+use agent_logging::{debug, info, warn};
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -207,6 +208,8 @@ impl std::fmt::Debug for LocalCrossEncoder {
 impl LocalCrossEncoder {
     /// 创建重排器（会下载模型，首次较慢）。
     pub fn new(model: RerankerModel, cache_dir: Option<std::path::PathBuf>) -> RagResult<Self> {
+        info!(model = %model.display_name(), "开始初始化重排模型（首次会下载模型）");
+
         let mut opts = fastembed::RerankInitOptions::new(model.to_fastembed())
             .with_show_download_progress(true);
 
@@ -214,8 +217,14 @@ impl LocalCrossEncoder {
             opts = opts.with_cache_dir(dir);
         }
 
-        let handle = fastembed::TextRerank::try_new(opts)
-            .map_err(|e| RagError::Rerank(format!("重排模型初始化失败（首次使用需要联网下载模型）: {e}")))?;
+        let handle = fastembed::TextRerank::try_new(opts).map_err(|e| {
+            warn!(model = %model.display_name(), error = %e, "重排模型初始化失败");
+            RagError::Rerank(format!(
+                "重排模型初始化失败（首次使用需要联网下载模型）: {e}"
+            ))
+        })?;
+
+        info!(model = %model.display_name(), "重排模型就绪");
 
         Ok(Self {
             model: Arc::new(handle),
@@ -262,6 +271,13 @@ impl Reranker for LocalCrossEncoder {
             let query = query.to_string();
             let texts = texts.clone();
 
+            debug!(
+                model = %self.model_name,
+                candidate_count = documents.len(),
+                top_n,
+                "发起重排推理"
+            );
+
             let result = tokio::task::spawn_blocking(move || {
                 model
                     .rerank(query, texts, false, None)
@@ -270,7 +286,14 @@ impl Reranker for LocalCrossEncoder {
             .await
             .map_err(|e| RagError::Internal(format!("重排任务失败: {e}")))??;
 
-            Ok(take_top(result, documents, top_n))
+            let hits = take_top(result, documents, top_n);
+            info!(
+                model = %self.model_name,
+                hit_count = hits.len(),
+                top_score = hits.first().map(|h| h.score),
+                "重排完成"
+            );
+            Ok(hits)
         })
     }
 
@@ -395,11 +418,15 @@ impl Reranker for CohereReranker {
                 .json(&payload)
                 .send()
                 .await
-                .map_err(|e| RagError::Rerank(format!("调用 Cohere rerank 失败: {e}")))?;
+                .map_err(|e| {
+                    warn!(endpoint = %self.endpoint, error = %e, "Cohere rerank 调用失败");
+                    RagError::Rerank(format!("调用 Cohere rerank 失败: {e}"))
+                })?;
 
             if !response.status().is_success() {
                 let status = response.status();
                 let body = response.text().await.unwrap_or_default();
+                warn!(status = status.as_u16(), "Cohere rerank 返回错误状态");
                 return Err(RagError::Rerank(format!(
                     "Cohere rerank 返回错误状态 {status}: {}",
                     body.chars().take(200).collect::<String>()
@@ -496,9 +523,7 @@ impl RerankerModel {
         match self {
             RerankerModel::BgeRerankerBase => fastembed::RerankerModel::BGERerankerBase,
             RerankerModel::BgeRerankerV2M3 => fastembed::RerankerModel::BGERerankerV2M3,
-            RerankerModel::JinaRerankerV1TurboEn => {
-                fastembed::RerankerModel::JINARerankerV1TurboEn
-            }
+            RerankerModel::JinaRerankerV1TurboEn => fastembed::RerankerModel::JINARerankerV1TurboEn,
         }
     }
 
@@ -615,8 +640,7 @@ impl Reranker for KeywordReranker {
                     if text.contains(&self.keyword) {
                         score += 2.0;
                     }
-                    if query.to_lowercase().contains(&self.keyword)
-                        && text.contains(&self.keyword)
+                    if query.to_lowercase().contains(&self.keyword) && text.contains(&self.keyword)
                     {
                         score += 1.0;
                     }
@@ -731,8 +755,14 @@ mod tests {
 
     #[test]
     fn parses_backend_names() {
-        assert_eq!(RerankBackend::from_env_value("local"), Some(RerankBackend::Local));
-        assert_eq!(RerankBackend::from_env_value("Cohere"), Some(RerankBackend::Cohere));
+        assert_eq!(
+            RerankBackend::from_env_value("local"),
+            Some(RerankBackend::Local)
+        );
+        assert_eq!(
+            RerankBackend::from_env_value("Cohere"),
+            Some(RerankBackend::Cohere)
+        );
         assert_eq!(RerankBackend::from_env_value("unknown"), None);
     }
 

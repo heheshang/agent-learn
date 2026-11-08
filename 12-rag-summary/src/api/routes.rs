@@ -13,10 +13,10 @@
 //! 任何业务判断都不该出现在这里 —— 否则同一个逻辑会被
 //! CLI 和 HTTP 走两遍，两边慢慢就会走偏。
 
+use agent_logging::trace_layer;
 use axum::Router;
 use axum::routing::{get, post};
 use tower_http::cors::CorsLayer;
-use tower_http::trace::TraceLayer;
 
 use crate::api::AppState;
 use crate::api::handlers;
@@ -32,6 +32,6 @@ pub fn router(state: AppState) -> Router {
         .route("/api/eval", post(handlers::eval))
         .route("/api/reindex", post(handlers::reindex))
         .layer(CorsLayer::permissive())
-        .layer(TraceLayer::new_for_http())
+        .layer(trace_layer())
         .with_state(state)
 }

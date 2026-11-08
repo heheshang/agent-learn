@@ -41,6 +41,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
+use agent_logging::{debug, info, warn};
 use rag_07::llm::Llm;
 use rag_07::transform::{QueryTransformer, Strategy, TransformedQuery};
 use rag_08::reranker::{RerankDocument, Reranker};
@@ -265,6 +266,15 @@ impl SummaryPipeline {
 
         let retrieve_ms = retrieve_start.elapsed().as_millis() as u64;
 
+        debug!(
+            mode = mode.name(),
+            query_count = queries.len(),
+            candidate_pool,
+            fused = fused_hits.len(),
+            retrieve_ms,
+            "混合检索完成"
+        );
+
         // 阈值过滤（只对「能拿到稠密分数」的命中生效）。
         //
         // ⚠️ 服务端混合检索的分数是**融合后的 RRF 分**，
@@ -289,6 +299,10 @@ impl SummaryPipeline {
                 Some(existing) => format!("{existing}；{note}"),
                 None => note,
             });
+        }
+
+        if let Some(reason) = &degrade_reason {
+            warn!(mode = mode.name(), reason = %reason, "检索链路发生降级");
         }
 
         Ok(RetrievalOutcome {
@@ -325,6 +339,16 @@ impl SummaryPipeline {
         let compressed = self.compressor.compress(&retrieval.hits);
         let compress_enabled = self.config.compress.enabled;
 
+        debug!(
+            enabled = compress_enabled,
+            tokens_before = compressed.tokens_before,
+            tokens_after = compressed.tokens_after,
+            dropped = compressed.dropped,
+            truncated = compressed.truncated,
+            passages = compressed.passages.len(),
+            "上下文压缩完成"
+        );
+
         // ── 4. Prompt 组装 ───────────────────────────────────────
         // 复用 06-rag 的 system 提示词（格式与前几个项目保持一致），
         // 但 user 提示词用压缩后的上下文。
@@ -339,6 +363,14 @@ impl SummaryPipeline {
             .map_err(|e| RagError::Generation(e.to_string()))?;
 
         let citations = extract_citations(&answer, &compressed.passages);
+
+        info!(
+            mode = mode.name(),
+            answer_len = answer.chars().count(),
+            citations = citations.len(),
+            elapsed_ms = start.elapsed().as_millis() as u64,
+            "生成完成"
+        );
 
         Ok(AskOutcome {
             answer,
@@ -381,11 +413,13 @@ impl SummaryPipeline {
                     .collect();
 
                 if texts.is_empty() {
+                    warn!("改写结果为空，降级为原问题");
                     (
                         vec![query.to_string()],
                         Some("改写结果为空，降级为原问题".to_string()),
                     )
                 } else {
+                    debug!(query_count = texts.len(), "查询改写完成");
                     (texts, None)
                 }
             }
@@ -393,10 +427,13 @@ impl SummaryPipeline {
                 vec![query.to_string()],
                 Some("改写返回空结果，降级为原问题".to_string()),
             ),
-            Err(e) => (
-                vec![query.to_string()],
-                Some(format!("改写失败（{e}），降级为原问题")),
-            ),
+            Err(e) => {
+                warn!(error = %e, "查询改写失败，降级为原问题");
+                (
+                    vec![query.to_string()],
+                    Some(format!("改写失败（{e}），降级为原问题")),
+                )
+            }
         }
     }
 
@@ -456,17 +493,25 @@ impl SummaryPipeline {
                     })
                     .collect();
 
+                debug!(
+                    hit_count = hits.len(),
+                    top_n = self.config.rerank.top_n,
+                    "重排完成"
+                );
                 (hits, true, None)
             }
-            Err(e) => (
-                fused_hits
-                    .iter()
-                    .take(self.config.rerank.top_n)
-                    .cloned()
-                    .collect(),
-                false,
-                Some(format!("重排失败（{e}），降级为融合后的原始顺序")),
-            ),
+            Err(e) => {
+                warn!(error = %e, "重排失败，降级为融合后的原始顺序");
+                (
+                    fused_hits
+                        .iter()
+                        .take(self.config.rerank.top_n)
+                        .cloned()
+                        .collect(),
+                    false,
+                    Some(format!("重排失败（{e}），降级为融合后的原始顺序")),
+                )
+            }
         }
     }
 }

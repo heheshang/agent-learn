@@ -20,6 +20,7 @@ mod agent_demo;
 mod model_demo;
 mod tools;
 
+use agent_logging::{info, init};
 use anyhow::Result;
 
 /// 顶层入口：按名字跑各个 demo。
@@ -36,7 +37,10 @@ use anyhow::Result;
 /// ```
 #[tokio::main]
 async fn main() -> Result<()> {
+    init("genai-03");
+
     let demo = std::env::args().nth(1).unwrap_or_else(|| "all".to_string());
+    info!(demo = %demo, "启动 03-genai");
 
     match demo.as_str() {
         "chat" => model_demo::run_chat_demos().await?,
@@ -60,5 +64,6 @@ async fn main() -> Result<()> {
         }
     }
 
+    info!("03-genai 执行完毕");
     Ok(())
 }

@@ -19,8 +19,8 @@
 //!
 //! 这样**所有**错误都是同一种 JSON 格式。
 
-use axum::extract::{FromRequest, Request};
 use axum::Json;
+use axum::extract::{FromRequest, Request};
 
 use crate::error::RagError;
 

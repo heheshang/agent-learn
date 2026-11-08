@@ -27,6 +27,7 @@
 
 use std::path::{Path, PathBuf};
 
+use agent_logging::{info, init};
 use anyhow::Result;
 
 use rag_04::loader::{DoclingLoader, DocumentLoader, MarkdownLoader, PdfTextLoader};
@@ -39,8 +40,11 @@ use rag_04::splitter::{
 const DATA_DIR: &str = "data";
 
 fn main() -> Result<()> {
+    init("rag-04");
+
     let demo = std::env::args().nth(1).unwrap_or_else(|| "all".to_string());
     let data_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(DATA_DIR);
+    info!(demo = %demo, data_dir = %data_dir.display(), "启动 04-rag");
 
     match demo.as_str() {
         "load" => run_load_demo(&data_dir)?,
@@ -58,6 +62,7 @@ fn main() -> Result<()> {
         }
     }
 
+    info!("04-rag 执行完毕");
     Ok(())
 }
 
@@ -93,6 +98,12 @@ fn run_load_demo(dir: &Path) -> Result<()> {
     println!("\n---");
     match DoclingLoader.load(&pdf_path) {
         Ok(pdf_structured) => {
+            info!(
+                file = %pdf_structured.file_name,
+                chars = pdf_structured.char_len(),
+                lines = pdf_structured.line_count(),
+                "Docling 加载成功"
+            );
             println!("[DoclingLoader] {}", pdf_structured.summary());
             println!("--- 前 15 行 ---");
             for line in pdf_structured.text.lines().take(15) {
@@ -106,6 +117,7 @@ fn run_load_demo(dir: &Path) -> Result<()> {
             }
         }
         Err(e) => {
+            agent_logging::warn!(error = %e, "Docling 加载失败（不影响其他 demo）");
             println!("[DoclingLoader] 失败: {e}");
             println!("（需要 docling 的 pdf-text feature，转换失败不影响其他 demo）");
         }
@@ -193,6 +205,15 @@ fn run_compare_demo(dir: &Path) -> Result<()> {
         let with_heading = chunks.iter().filter(|c| !c.heading_path.is_empty()).count();
         let coverage = with_heading * 100 / chunks.len();
 
+        info!(
+            strategy = %name,
+            chunk_count = chunks.len(),
+            avg_tokens = avg,
+            max_tokens = max,
+            heading_coverage_pct = coverage,
+            "分块策略统计"
+        );
+
         println!(
             "{:<18} {:>6} {:>10} {:>10} {:>11}%",
             name,
@@ -245,6 +266,7 @@ fn run_pipeline_demo(dir: &Path) -> Result<()> {
     let splitter = StructureAwareSplitter::new(config.clone());
 
     let docs = rag_04::loader::load_directory(dir)?;
+    info!(doc_count = docs.len(), "文档目录加载完成");
     println!("\n加载了 {} 份文档:", docs.len());
     for d in &docs {
         println!("  {}", d.summary());
@@ -253,6 +275,11 @@ fn run_pipeline_demo(dir: &Path) -> Result<()> {
     let mut all_chunks = Vec::new();
     for doc in &docs {
         let chunks = splitter.split(doc, &counter);
+        info!(
+            file = %doc.file_name,
+            chunk_count = chunks.len(),
+            "文档分块完成"
+        );
         println!("\n  {} → {} 块", doc.file_name, chunks.len());
         all_chunks.extend(chunks);
     }

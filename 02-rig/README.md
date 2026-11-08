@@ -30,9 +30,9 @@ src/
 graph TB
     subgraph L1["① 模型层（无 Agent）"]
         MC["model_call.rs"]
-        MC1[single_turn<br/>单轮调用]
-        MC2[multi_turn<br/>手工维护历史]
-        MC3[raw_tool_call<br/>只声明不执行]
+        MC1["single_turn<br/>单轮调用"]
+        MC2["multi_turn<br/>手工维护历史"]
+        MC3["raw_tool_call<br/>只声明不执行"]
     end
 
     subgraph L2["② Agent 层（自动循环）"]
@@ -51,9 +51,9 @@ graph TB
 
     subgraph L4["④ 传输层中间件"]
         MW["middleware.rs"]
-        MW1[before_request_headers<br/>加追踪头]
-        MW2[before_request_body<br/>观察/改写 body]
-        MW3[after_response<br/>观察状态码耗时]
+        MW1["before_request_headers<br/>加追踪头"]
+        MW2["before_request_body<br/>观察/改写 body"]
+        MW3["after_response<br/>观察状态码耗时"]
     end
 
     subgraph Provider["DeepSeek API"]
@@ -128,45 +128,85 @@ graph LR
     style M fill:#ffebee
 ```
 
-### 思维导图：rig 的核心概念
+### 知识地图：rig 的核心概念
 
 ```mermaid
-mindmap
-  root((rig<br/>AI 编排框架))
-    模型调用
-      Message 四种角色
-      CompletionRequest
-      Model call / stream
-      无循环
-    Agent
-      AgentBuilder 构造
-      preamble 系统提示
-      default_max_turns
-      prompt 自动循环
-      chat 外部历史
-    工具
-      rig_tool 宏
-      手写 impl Tool
-      NAME 叫什么
-      description 做什么
-      parameters 什么参数
-      call 怎么执行
-    状态
-      工具实例状态
-      ToolContext 运行内
-      memory 跨运行
-      Scratchpad hook
-    Middleware
-      传输层
-      before_request_headers
-      before_request_body
-      after_response
-      与 AgentHook 的区别
-    核心认知
-      Agent = 手工循环的自动化
-      工具四问
-      上下文模型看不到
-      middleware 作用在线缆层
+graph LR
+    N1(("rig<br/>AI 编排框架"))
+    subgraph N2["模型调用"]
+        N3["Message 四种角色"]
+        N2 --> N3
+        N4["CompletionRequest"]
+        N2 --> N4
+        N5["Model call / stream"]
+        N2 --> N5
+        N6["无循环"]
+        N2 --> N6
+    end
+    N1 --> N2
+    subgraph N7["Agent"]
+        N8["AgentBuilder 构造"]
+        N7 --> N8
+        N9["preamble 系统提示"]
+        N7 --> N9
+        N10["default_max_turns"]
+        N7 --> N10
+        N11["prompt 自动循环"]
+        N7 --> N11
+        N12["chat 外部历史"]
+        N7 --> N12
+    end
+    N1 --> N7
+    subgraph N13["工具"]
+        N14["rig_tool 宏"]
+        N13 --> N14
+        N15["手写 impl Tool"]
+        N13 --> N15
+        N16["NAME 叫什么"]
+        N13 --> N16
+        N17["description 做什么"]
+        N13 --> N17
+        N18["parameters 什么参数"]
+        N13 --> N18
+        N19["call 怎么执行"]
+        N13 --> N19
+    end
+    N1 --> N13
+    subgraph N20["状态"]
+        N21["工具实例状态"]
+        N20 --> N21
+        N22["ToolContext 运行内"]
+        N20 --> N22
+        N23["memory 跨运行"]
+        N20 --> N23
+        N24["Scratchpad hook"]
+        N20 --> N24
+    end
+    N1 --> N20
+    subgraph N25["Middleware"]
+        N26["传输层"]
+        N25 --> N26
+        N27["before_request_headers"]
+        N25 --> N27
+        N28["before_request_body"]
+        N25 --> N28
+        N29["after_response"]
+        N25 --> N29
+        N30["与 AgentHook 的区别"]
+        N25 --> N30
+    end
+    N1 --> N25
+    subgraph N31["核心认知"]
+        N32["Agent = 手工循环的自动化"]
+        N31 --> N32
+        N33["工具四问"]
+        N31 --> N33
+        N34["上下文模型看不到"]
+        N31 --> N34
+        N35["middleware 作用在线缆层"]
+        N31 --> N35
+    end
+    N1 --> N31
 ```
 
 ---
@@ -429,12 +469,192 @@ let client = OpenAIConfig::from_env_with(&DEEPSEEK)?.connect(http);
 
 > **`AgentHook` vs `HttpMiddleware`**：`AgentHook` 工作在 agent 的**语义层**（选模型、改请求、拦截工具调用、模型路由），`HttpMiddleware` 工作在**线缆层**（每个 HTTP 请求）。两者互不替代。
 
+## 日志
+
+全仓库统一走 `00-logging`（`agent-logging`）。
+
+```bash
+RUST_LOG=info cargo run -p rig-02
+RUST_LOG=debug,rig_02=trace cargo run -p rig-02
+```
+
+rig 的 middleware 钩子里也用结构化日志（而不是 `println!`）：
+
+```rust
+use agent_logging::info;
+
+info!(
+    seq = count,
+    method = %exchange.method,
+    path = %exchange.uri.path(),
+    status = status.as_u16(),
+    "上游模型请求完成"
+);
+```
+
+| 事件 | 级别 | 关键字段 |
+|---|---|---|
+| 模型调用 | `INFO` | `model` / `prompt_chars` |
+| 工具调用（rig 的 tool） | `DEBUG` | `tool` / `args` |
+| 上游 HTTP 请求完成（middleware） | `INFO` | `method` / `path` / `status` |
+| 模型调用失败 | `ERROR` | `model` / `error` |
+
+---
 ---
 
-## 与 01-axum 的关系
+## 思维导图：rig 的概念地图
+
+```mermaid
+mindmap
+  root((rig 0.46))
+    模型层
+      single_turn 单轮
+      multi_turn 手工历史
+      raw_tool_call 只声明
+      provider
+        deepseek
+        openai
+    Agent 层
+      AgentBuilder
+        preamble 系统提示
+        tool 逐个注册
+        default_max_turns
+      prompt 触发循环
+      chat 外部 history
+      memory 跨运行记忆
+    工具层 Tool
+      工具四问
+        NAME 叫什么
+        description 做什么
+        parameters 要什么参数
+        call 怎么执行
+      两种写法
+        rig_tool 宏
+        手写 impl Tool
+      ToolContext
+        宿主注入
+        模型看不到
+        require 取值
+    状态四层
+      工具实例状态
+        跟随 Agent
+        计数器 连接池
+      运行内状态
+        ToolContext
+        一次 prompt
+      跨运行状态
+        AgentBuilder memory
+        会话记忆
+      Hook 状态
+        Scratchpad
+        一次 run
+    中间件
+      HttpMiddleware
+        before_request_headers
+        before_request_body
+        after_response
+      AgentHook
+        on_prompt
+        on_completion
+    核心认知
+      工具是模型的外部感官
+      状态有四层 别搞混
+      裁判不能是选手
+```
+
+---
+
+## 技术参考速查
+
+### 工具的「四问」对照表
+
+一个合格的 `Tool` 必须回答这四个问题，缺一不可：
+
+| 问题 | 承载什么 | 缺了会怎样 |
+|---|---|---|
+| **叫什么** | `const NAME: &'static str` | 模型调不出来 |
+| **做什么** | `fn description() -> String` | 模型不知道该不该调 |
+| **要什么参数** | `fn parameters() -> serde_json::Value` | 模型填不对参数 |
+| **怎么执行** | `fn call(&mut ToolContext, Args)` | 逻辑无从落地 |
+
+⚠️ `description()` 的质量**直接决定**模型会不会调用这个工具。
+这是提示词工程的一部分，不是文档注释。
+
+### 两种工具写法的取舍
+
+| | `#[rig_tool]` 宏 | 手写 `impl Tool` |
+|---|---|---|
+| 代码量 | 少（几行） | 多（要写四个方法） |
+| 适用 | 简单、无状态、参数直接 | 需要自定义错误映射 / annotations |
+| 可读性 | 参数签名即文档 | 分离的四个方法 |
+
+⚠️ `#[rig_tool]` 宏生成的参数结构体要求参数类型能 `Deserialize + Serialize`。
+
+### 四层状态对照表（本项目最容易搞混的地方）
+
+| 层 | 载体 | 生命周期 | 典型用途 | 本项目示例 |
+|---|---|---|---|---|
+| **工具实例状态** | 工具结构体自身的字段 | 跟随 Agent | 计数器、连接池、缓存 | `CountCalls.calls` |
+| **运行内状态** | `ToolContext` | 一次 `prompt` | 把宿主数据喂给工具 | `SessionUser` |
+| **跨运行状态** | `AgentBuilder::memory` | 跨多次 `prompt` | 会话记忆、持久化 | 见 `agent_with_history` |
+| **Hook 状态** | `Scratchpad` | 一次 run 的 hook 之间 | 中间计数、路由决策 | — |
+
+⚠️ **工具实例是被 Agent 共享的** —— 所以可变状态要放在**实例**里，
+而不是 `ToolContext` 里（后者每次调用独立）。
+
+### `ToolContext` 的关键性质
+
+```text
+宿主 insert(T)  ──▶  ToolContext  ──▶  工具 require::<T>()
+                        │
+                        └─▶ ✗ 不会发给模型
+```
+
+模型**看不到** `ToolContext` 里的值 —— 它必须通过**调用工具**才能间接知道。
+这正是「工具」这个机制的意义：**给模型一个安全的、能触及外部世界的通道**。
+
+用 `#[derive(ContextValue)]` + `#[context(key = "...")]` 可以用类型本身当槽位 key，
+不用手写字符串，避免 key 冲突。
+
+### `#[rig(context)]` 标记
+
+```rust
+#[rig_tool(name = "whoami", description = "...")]
+pub fn whoami(#[rig(context)] context: &mut ToolContext) -> Result<String, ToolExecutionError> {
+    // ...
+}
+```
+
+`#[rig(context)]` 告诉宏：这个参数是**上下文**，不是模型要填的参数，
+因此它**不会出现在 JSON Schema 里**。
+
+少了这个标记 → 宏会试图把 `ToolContext` 当成一个要模型填的参数 → 生成的 Schema 是错的。
+
+### 中间件钩子速查
+
+| 钩子 | 时机 | 能做什么 |
+|---|---|---|
+| `before_request_headers` | 请求发出前 | 加追踪头、注入认证 |
+| `before_request_body` | body 序列化后 | 观察 / 改写请求体 |
+| `after_response` | 响应回来后 | 记录状态码、耗时、token 用量 |
+
+### 工具调用的轮次成本
+
+⚠️ **一次工具调用至少要 2~3 轮模型往返**：
+
+```text
+第 1 轮：模型输出 tool_call 请求
+        ↓  （框架执行工具，不消耗模型轮次）
+第 2 轮：模型读 tool_result，给出最终回答
+```
+
+所以 `default_max_turns` 要留够 —— 本项目设 8，
+因为「调工具 + 读结果 + 作答」至少要 2~3 轮，复杂任务更多。
+
+### Rig 与 01-axum 的概念对照
 
 | | 01-axum | 02-rig |
-|---|---------|--------|
+|---|---|---|
 | 关注点 | HTTP 服务端 | LLM 应用 |
 | 入口 | `Router` + handler | `AgentBuilder` + `prompt` |
 | 「请求」 | `Request<T>` → `Response` | `Message` → `CompletionResponse` |

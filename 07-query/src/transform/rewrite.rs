@@ -33,9 +33,10 @@
 //! **Rewrite 的收益高度依赖问题形态**，它不是「越大越通用」的策略。
 
 use crate::llm::Llm;
+use agent_logging::{debug, warn};
 
 use super::prompts::REWRITE_PROMPT;
-use super::{parse_single, QueryTransformer, Strategy, TransformedQuery, TransformFuture};
+use super::{QueryTransformer, Strategy, TransformFuture, TransformedQuery, parse_single};
 
 /// Rewrite 转换器。
 pub struct RewriteTransformer {
@@ -85,10 +86,13 @@ impl QueryTransformer for RewriteTransformer {
             let raw = self.llm.chat("", &prompt).await?;
 
             let Some(text) = parse_single(&raw) else {
+                warn!("Rewrite 输出解析不出内容");
                 return Err(crate::error::QueryError::Transformation(
                     "Rewrite 输出解析不出内容".to_string(),
                 ));
             };
+
+            debug!(question = %question, rewritten = %text, "Rewrite 改写完成");
 
             Ok(vec![TransformedQuery {
                 text,

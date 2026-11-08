@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+agent-logging = { path = "../00-logging" }
 anyhow = { workspace = true }
 genai = { workspace = true }
 rust-genai-agent = { workspace = true }

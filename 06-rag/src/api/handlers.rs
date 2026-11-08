@@ -4,15 +4,16 @@
 //! 核心逻辑全在 `retrieval` / `generation` / `agent` 里，
 //! handler 不做任何业务判断。
 
+use agent_logging::{debug, info, warn};
+use axum::Json;
 use axum::extract::State;
 use axum::response::IntoResponse;
-use axum::Json;
 
+use crate::api::AppState;
 use crate::api::extract::JsonBody;
 use crate::api::models::{
-    AskRequest, AskResponse, AgentResponse, ReindexResponse, SearchRequest, SearchResponse,
+    AgentResponse, AskRequest, AskResponse, ReindexResponse, SearchRequest, SearchResponse,
 };
-use crate::api::AppState;
 use crate::error::RagError;
 
 /// GET /health —— 健康检查。
@@ -60,13 +61,17 @@ pub async fn ask(
 
     let question = payload.question.trim();
     if question.is_empty() {
+        warn!("问题为空");
         return Err(RagError::BadRequest("问题不能为空".to_string()));
     }
 
     // 1. 检索。Naive 的关键点：**用原问题**检索，不改写。
     let retrieval = match payload.top_k {
         Some(k) if k > 0 => state.retriever.retrieve_with_top_k(question, k).await?,
-        Some(_) => return Err(RagError::BadRequest("top_k 必须大于 0".to_string())),
+        Some(_) => {
+            warn!(top_k = ?payload.top_k, "top_k 必须大于 0");
+            return Err(RagError::BadRequest("top_k 必须大于 0".to_string()));
+        }
         None => state.retriever.retrieve(question).await?,
     };
 
@@ -78,6 +83,14 @@ pub async fn ask(
         .generator
         .generate_with_citations(&prompt, &retrieval)
         .await?;
+
+    info!(
+        question = %question,
+        retrieved = retrieval.chunks.len(),
+        citations = generated.citations.len(),
+        elapsed_ms = start.elapsed().as_millis() as u64,
+        "问答完成"
+    );
 
     Ok(Json(AskResponse {
         answer: generated.answer,
@@ -105,10 +118,20 @@ pub async fn agent(
 
     let question = payload.question.trim();
     if question.is_empty() {
+        warn!("Agent 问题为空");
         return Err(RagError::BadRequest("问题不能为空".to_string()));
     }
 
     let result = state.agent.run(question).await?;
+
+    info!(
+        question = %question,
+        iterations = result.iterations,
+        tool_call_count = result.tool_calls.len(),
+        hit_max_iterations = result.hit_max_iterations,
+        elapsed_ms = start.elapsed().as_millis() as u64,
+        "Agent 问答完成"
+    );
 
     Ok(Json(AgentResponse {
         answer: result.answer,
@@ -133,14 +156,25 @@ pub async fn search(
 
     let query = payload.query.trim();
     if query.is_empty() {
+        warn!("搜索查询词为空");
         return Err(RagError::BadRequest("查询词不能为空".to_string()));
     }
 
     let result = match payload.top_k {
         Some(k) if k > 0 => state.retriever.retrieve_with_top_k(query, k).await?,
-        Some(_) => return Err(RagError::BadRequest("top_k 必须大于 0".to_string())),
+        Some(_) => {
+            warn!(top_k = ?payload.top_k, "top_k 必须大于 0");
+            return Err(RagError::BadRequest("top_k 必须大于 0".to_string()));
+        }
         None => state.retriever.retrieve(query).await?,
     };
+
+    debug!(
+        query = %query,
+        hit_count = result.chunks.len(),
+        elapsed_ms = start.elapsed().as_millis() as u64,
+        "搜索完成"
+    );
 
     Ok(Json(SearchResponse {
         query: result.query.clone(),
@@ -171,6 +205,13 @@ pub async fn reindex(State(state): State<AppState>) -> Result<Json<ReindexRespon
         &options,
     )
     .await?;
+
+    info!(
+        chunk_count = stats.chunk_count,
+        document_count = stats.document_count,
+        elapsed_ms = start.elapsed().as_millis() as u64,
+        "索引重建完成"
+    );
 
     Ok(Json(ReindexResponse {
         ok: true,

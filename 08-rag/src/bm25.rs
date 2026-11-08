@@ -80,6 +80,7 @@
 //! 查询时只遍历「查询里出现的词」对应的 posting list，
 //! 而不用扫描全部文档 —— 这是 BM25 能在百万级文档上跑得动的原因。
 
+use agent_logging::debug;
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
@@ -282,7 +283,6 @@ impl Bm25Index {
         if self.is_empty() || k == 0 {
             return Vec::new();
         }
-
         // 查询词去重：同一个词在查询里出现多次只算一次
         // （IDF 已经编码了「这个词有多稀有」，重复只会线性放大它的贡献）。
         let mut query_terms: Vec<&str> = Vec::new();
@@ -293,6 +293,7 @@ impl Bm25Index {
         }
 
         if query_terms.is_empty() {
+            debug!(query = %query, "BM25 没有可用的查询词（全部不在词表里）");
             return Vec::new();
         }
 
@@ -419,11 +420,7 @@ mod tests {
 
     #[test]
     fn common_term_gets_lower_idf_than_rare_term() {
-        let index = Bm25Index::build(&[
-            doc("a", "系统"),
-            doc("b", "系统"),
-            doc("c", "光合作用"),
-        ]);
+        let index = Bm25Index::build(&[doc("a", "系统"), doc("b", "系统"), doc("c", "光合作用")]);
 
         assert!(index.idf("光合作用") > index.idf("系统"));
     }

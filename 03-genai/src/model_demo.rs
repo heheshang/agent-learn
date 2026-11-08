@@ -4,6 +4,7 @@
 //! 请求-响应。你需要自己把历史消息带过去，工具调用也要自己执行、自己
 //! 回填。理解这一层是理解 agent 层的前提。
 
+use agent_logging::{debug, info, warn};
 use anyhow::Result;
 use genai::Client;
 use genai::chat::printer::print_chat_stream;
@@ -32,9 +33,17 @@ pub async fn run_single_turn() -> Result<()> {
 
     let chat_res = client.exec_chat(MODEL, chat_req, None).await?;
 
+    let usage = &chat_res.usage;
+    info!(
+        model = %chat_res.model_iden,
+        prompt_tokens = usage.prompt_tokens.unwrap_or(0),
+        completion_tokens = usage.completion_tokens.unwrap_or(0),
+        total_tokens = usage.total_tokens.unwrap_or(0),
+        "单轮对话完成"
+    );
+
     println!("回答: {}", chat_res.first_text().unwrap_or("(空)"));
     println!("模型: {}", chat_res.model_iden);
-    let usage = &chat_res.usage;
     println!(
         "用量: prompt={} completion={} total={}",
         usage.prompt_tokens.unwrap_or(0),
@@ -42,6 +51,7 @@ pub async fn run_single_turn() -> Result<()> {
         usage.total_tokens.unwrap_or(0)
     );
     if let Some(stop) = chat_res.stop_reason.as_ref() {
+        debug!(stop_reason = ?stop, "模型停止原因");
         println!("停止原因: {stop:?}");
     }
 
@@ -64,6 +74,7 @@ pub async fn run_multi_turn() -> Result<()> {
     for q in questions {
         chat_req = chat_req.append_message(ChatMessage::user(q));
 
+        info!(question = %q, message_count = chat_req.messages.len(), "发起多轮对话请求");
         let chat_res = client.exec_chat(MODEL, chat_req.clone(), None).await?;
         let answer = chat_res.first_text().unwrap_or("(空)").to_string();
 
@@ -74,6 +85,10 @@ pub async fn run_multi_turn() -> Result<()> {
         chat_req = chat_req.append_message(ChatMessage::assistant(answer));
     }
 
+    info!(
+        message_count = chat_req.messages.len(),
+        "多轮对话结束，历史已累积"
+    );
     println!("历史消息条数: {}", chat_req.messages.len());
 
     Ok(())
@@ -95,6 +110,7 @@ pub async fn run_streaming() -> Result<()> {
     print!("流式回答: ");
     let full = print_chat_stream(chat_res, None).await?;
     println!("\n(完整长度: {} 字符)", full.len());
+    info!(chars = full.len(), "流式输出结束");
 
     Ok(())
 }
@@ -117,8 +133,14 @@ pub async fn run_json_mode() -> Result<()> {
     let text = chat_res.first_text().unwrap_or("(空)");
     println!("原始返回: {text}");
     match serde_json::from_str::<serde_json::Value>(text) {
-        Ok(v) => println!("解析成功: {v}"),
-        Err(e) => println!("解析失败(模型没听话): {e}"),
+        Ok(v) => {
+            info!("JSON 模式解析成功");
+            println!("解析成功: {v}")
+        }
+        Err(e) => {
+            warn!(error = %e, "JSON 模式解析失败（模型没听话）");
+            println!("解析失败(模型没听话): {e}")
+        }
     }
 
     Ok(())
@@ -165,6 +187,7 @@ pub async fn run_raw_tool_call() -> Result<()> {
         .collect::<Vec<_>>();
 
     if tool_calls.is_empty() {
+        warn!("模型没有调用工具，直接给出了答案");
         println!(
             "模型没调工具，直接回答: {}",
             chat_res.first_text().unwrap_or("(空)")
@@ -175,6 +198,7 @@ pub async fn run_raw_tool_call() -> Result<()> {
     // 5.3 执行每个工具调用。
     let mut responses = Vec::new();
     for call in &tool_calls {
+        info!(tool = %call.fn_name, args = %call.fn_arguments, "模型要求调用工具");
         println!("模型要求调用: {} args={}", call.fn_name, call.fn_arguments);
 
         let result = match call.fn_name.as_str() {
@@ -182,25 +206,37 @@ pub async fn run_raw_tool_call() -> Result<()> {
                 let expr = call.fn_arguments.get("expression").and_then(|v| v.as_str());
                 match expr {
                     Some(expr) => match calculate(expr) {
-                        Ok(value) => ToolResponse::new(
-                            call.call_id.clone(),
-                            json!({ "result": value }).to_string(),
-                        ),
-                        Err(CalcError::InvalidArguments(msg)) => ToolResponse::new(
-                            call.call_id.clone(),
-                            json!({ "error": msg }).to_string(),
-                        ),
+                        Ok(value) => {
+                            debug!(expression = %expr, value, "工具 calculate 执行成功");
+                            ToolResponse::new(
+                                call.call_id.clone(),
+                                json!({ "result": value }).to_string(),
+                            )
+                        }
+                        Err(CalcError::InvalidArguments(msg)) => {
+                            warn!(expression = %expr, error = %msg, "工具 calculate 参数不合法");
+                            ToolResponse::new(
+                                call.call_id.clone(),
+                                json!({ "error": msg }).to_string(),
+                            )
+                        }
                     },
-                    None => ToolResponse::new(
-                        call.call_id.clone(),
-                        json!({ "error": "缺少 expression 参数" }).to_string(),
-                    ),
+                    None => {
+                        warn!("工具 calculate 缺少 expression 参数");
+                        ToolResponse::new(
+                            call.call_id.clone(),
+                            json!({ "error": "缺少 expression 参数" }).to_string(),
+                        )
+                    }
                 }
             }
-            other => ToolResponse::new(
-                call.call_id.clone(),
-                json!({ "error": format!("未知工具: {other}") }).to_string(),
-            ),
+            other => {
+                warn!(tool = %other, "收到未知工具的调用请求");
+                ToolResponse::new(
+                    call.call_id.clone(),
+                    json!({ "error": format!("未知工具: {other}") }).to_string(),
+                )
+            }
         };
         responses.push(result);
     }
@@ -212,6 +248,7 @@ pub async fn run_raw_tool_call() -> Result<()> {
 
     // 5.5 第二轮：模型看到工具结果，给出最终答案。
     let chat_res = client.exec_chat(MODEL, chat_req, None).await?;
+    info!("工具结果已回填，发起第二轮请求");
     println!("最终回答: {}", chat_res.first_text().unwrap_or("(空)"));
 
     Ok(())

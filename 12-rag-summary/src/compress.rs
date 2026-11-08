@@ -50,6 +50,7 @@
 //! 所以压缩时**重新编号**，而不是保留原始 rank。
 //! 否则模型会引用一个「已经被砍掉的块」。
 
+use agent_logging::debug;
 use rag_04::splitter::TokenCounter;
 
 use crate::config::CompressConfig;
@@ -201,6 +202,16 @@ impl ContextCompressor {
 
         let tokens_after: usize = passages.iter().map(|h| self.count_hit(h)).sum();
 
+        debug!(
+            budget = self.config.budget_tokens,
+            tokens_before,
+            tokens_after,
+            kept = passages.len(),
+            dropped,
+            truncated,
+            "上下文压缩完成"
+        );
+
         CompressedContext {
             text: render_context(&passages),
             tokens_before,
@@ -210,7 +221,6 @@ impl ContextCompressor {
             truncated,
         }
     }
-
     /// 计算一个块进入上下文的 token 成本（标题 + 正文 + 引用标记）。
     fn count_hit(&self, hit: &Hit) -> usize {
         let head = if hit.heading_path.is_empty() {

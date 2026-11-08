@@ -4,18 +4,19 @@
 //! 核心逻辑全在 `pipeline` / `hybrid` / `reranker` 里，
 //! handler 不做任何业务判断。
 
+use agent_logging::{info, warn};
 use std::time::Instant;
 
+use axum::Json;
 use axum::extract::State;
 use axum::response::IntoResponse;
-use axum::Json;
 
+use crate::api::AppState;
 use crate::api::extract::JsonBody;
 use crate::api::models::{
     AskRequest, AskResponse, CompareRequest, CompareResponse, ModeResult, ReindexResponse,
     SearchRequest, SearchResponse,
 };
-use crate::api::AppState;
 use crate::error::RagError;
 use crate::hybrid::SearchMode;
 
@@ -90,6 +91,7 @@ pub async fn ask(
 
     let question = payload.question.trim();
     if question.is_empty() {
+        warn!("问答问题为空");
         return Err(RagError::BadRequest("问题不能为空".to_string()));
     }
 
@@ -98,6 +100,16 @@ pub async fn ask(
     // 复用流水线的 `ask_with` —— Prompt 组装和引用解析都在那里，
     // handler 不重复实现（两处实现迟早会漂移）。
     let outcome = state.pipeline.ask_with(question, mode).await?;
+
+    info!(
+        question = %question,
+        mode = mode.name(),
+        hits = outcome.retrieval.hits.len(),
+        citations = outcome.citations.len(),
+        reranked = outcome.retrieval.reranked,
+        elapsed_ms = start.elapsed().as_millis() as u64,
+        "问答完成"
+    );
 
     Ok(Json(AskResponse {
         answer: outcome.answer,
@@ -128,12 +140,23 @@ pub async fn search(
 
     let question = payload.question.trim();
     if question.is_empty() {
+        warn!("搜索问题为空");
         return Err(RagError::BadRequest("问题不能为空".to_string()));
     }
 
     let mode = resolve_mode(payload.mode.as_ref(), state.config.retrieval.mode)?;
 
     let outcome = state.pipeline.retrieve_with(question, mode).await?;
+
+    info!(
+        question = %question,
+        mode = mode.name(),
+        hits = outcome.hits.len(),
+        reranked = outcome.reranked,
+        retrieve_ms = outcome.retrieve_ms,
+        rerank_ms = outcome.rerank_ms,
+        "搜索完成"
+    );
 
     Ok(Json(SearchResponse {
         question: question.to_string(),
@@ -172,6 +195,7 @@ pub async fn compare(
 
     let question = payload.question.trim();
     if question.is_empty() {
+        warn!("对比问题为空");
         return Err(RagError::BadRequest("问题不能为空".to_string()));
     }
 
@@ -236,6 +260,14 @@ pub async fn compare(
         .map(|r| r.mode.name().to_string())
         .collect();
 
+    info!(
+        question = %question,
+        mode_count = results.len(),
+        successful = ?successful_modes,
+        elapsed_ms = start.elapsed().as_millis() as u64,
+        "多模式对比完成"
+    );
+
     Ok(Json(CompareResponse {
         question: question.to_string(),
         results,
@@ -289,6 +321,13 @@ pub async fn reindex(State(state): State<AppState>) -> Result<Json<ReindexRespon
     .await?;
 
     let bm25 = crate::index::build_bm25(&state.config.data_dir, &state.config.splitter)?;
+
+    info!(
+        chunk_count = stats.chunk_count,
+        bm25_documents = bm25.len(),
+        elapsed_ms = start.elapsed().as_millis() as u64,
+        "索引重建完成"
+    );
 
     Ok(Json(ReindexResponse {
         ok: true,

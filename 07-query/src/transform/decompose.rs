@@ -54,11 +54,10 @@
 //! 详见 [`crate::fusion`]。
 
 use crate::llm::Llm;
+use agent_logging::{debug, warn};
 
 use super::prompts::DECOMPOSE_PROMPT;
-use super::{
-    parse_numbered_lines, QueryTransformer, Strategy, TransformedQuery, TransformFuture,
-};
+use super::{QueryTransformer, Strategy, TransformFuture, TransformedQuery, parse_numbered_lines};
 
 /// Decompose 转换器。
 pub struct DecomposeTransformer {
@@ -134,9 +133,15 @@ impl QueryTransformer for DecomposeTransformer {
             let items = parse_numbered_lines(&raw, self.max_sub_questions);
 
             if items.is_empty() {
+                warn!("Decompose 输出解析不出子问题");
                 return Err(crate::error::QueryError::Transformation(
                     "Decompose 输出解析不出子问题".to_string(),
                 ));
+            }
+
+            debug!(question = %question, sub_count = items.len(), "Decompose 拆分子问题");
+            for (i, item) in items.iter().enumerate() {
+                debug!(index = i + 1, sub_question = %item, "子问题");
             }
 
             Ok(items
@@ -167,7 +172,10 @@ mod tests {
         );
         let t = DecomposeTransformer::new(Arc::new(llm));
 
-        let out = t.transform("光合作用的光反应和暗反应分别在什么位置进行？").await.unwrap();
+        let out = t
+            .transform("光合作用的光反应和暗反应分别在什么位置进行？")
+            .await
+            .unwrap();
         assert_eq!(out.len(), 3);
         assert!(out.iter().all(|q| q.strategy == Strategy::Decompose));
         assert_eq!(out[0].variant, Some(0));

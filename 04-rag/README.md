@@ -176,57 +176,207 @@ graph TB
 
 > 关键差异：`RecursiveSplitter` 的块**可能跨标题**（语义污染）；`StructureAwareSplitter` 保证**块永不跨标题**，且标题路径覆盖率 100%。
 
-### 思维导图：加载与分割的知识地图
+### 知识地图：加载与分割
+
+```mermaid
+graph LR
+    N1(("04-rag<br/>加载 + 分割"))
+    subgraph N2["加载层 Loaders"]
+        subgraph N3["DocumentLoader trait"]
+            N4["supported_extensions"]
+            N3 --> N4
+            N5["load"]
+            N3 --> N5
+            N6["supports"]
+            N3 --> N6
+        end
+        N2 --> N3
+        subgraph N7["MarkdownLoader"]
+            N8["直接读"]
+            N7 --> N8
+            N9["天然带结构"]
+            N7 --> N9
+        end
+        N2 --> N7
+        subgraph N10["PdfTextLoader"]
+            N11["pdf-extract"]
+            N10 --> N11
+            N12["快 零依赖"]
+            N10 --> N12
+            N13["丢结构"]
+            N10 --> N13
+        end
+        N2 --> N10
+        subgraph N14["DoclingLoader"]
+            N15["text_layer_only"]
+            N14 --> N15
+            N16["export_to_markdown"]
+            N14 --> N16
+            N17["结构感知"]
+            N14 --> N17
+        end
+        N2 --> N14
+        N18["loader_for 按扩展名"]
+        N2 --> N18
+        N19["load_directory 排序保证稳定"]
+        N2 --> N19
+    end
+    N1 --> N2
+    subgraph N20["分割层 Splitters"]
+        N21["Splitter trait"]
+        N20 --> N21
+        subgraph N22["RecursiveSplitter"]
+            N23["段落 换行 句子 词 字符"]
+            N22 --> N23
+            N24["可能跨标题"]
+            N22 --> N24
+        end
+        N20 --> N22
+        subgraph N25["MarkdownSplitter"]
+            N26["CommonMark 块级元素"]
+            N25 --> N26
+        end
+        N20 --> N25
+        subgraph N27["StructureAwareSplitter"]
+            N28["沿标题层级"]
+            N27 --> N28
+            N29["永不跨标题"]
+            N27 --> N29
+            N30["section 内滑窗"]
+            N27 --> N30
+        end
+        N20 --> N27
+        subgraph N31["SplitterConfig"]
+            N32["chunk_size 300"]
+            N31 --> N32
+            N33["chunk_overlap 30"]
+            N31 --> N33
+            N34["add_heading_context"]
+            N31 --> N34
+        end
+        N20 --> N31
+        subgraph N35["TokenCounter"]
+            N36["tiktoken cl100k_base"]
+            N35 --> N36
+            N37["真实 token 不是估算"]
+            N35 --> N37
+        end
+        N20 --> N35
+    end
+    N1 --> N20
+    subgraph N38["Chunk 结构"]
+        N39["heading_path 标题路径"]
+        N38 --> N39
+        N40["text 正文"]
+        N38 --> N40
+        N41["embedded_text 带前缀 送去做嵌入"]
+        N38 --> N41
+        N42["token_count / char_count"]
+        N38 --> N42
+    end
+    N1 --> N38
+    subgraph N43["核心认知"]
+        N44["Loader 决定拿到什么文本"]
+        N43 --> N44
+        N45["Splitter 决定能检索到什么"]
+        N43 --> N45
+        N46["标题路径是提升召回最有效的单技巧"]
+        N43 --> N46
+    end
+    N1 --> N43
+```
+
+---
+
+## 思维导图：加载与分割体系
 
 ```mermaid
 mindmap
-  root((04-rag<br/>加载 + 分割))
-    加载层 Loaders
+  root((04-rag))
+    加载层 loader.rs
       DocumentLoader trait
         supported_extensions
         load
         supports
       MarkdownLoader
-        直接读
-        天然带结构
+        保留 # 标题
       PdfTextLoader
         pdf-extract
-        快 零依赖
-        丢结构
+        快但丢结构
       DoclingLoader
-        text_layer_only
-        export_to_markdown
         结构感知
-      loader_for 按扩展名
-      load_directory 排序保证稳定
-    分割层 Splitters
+        转 Markdown
+      loader_for
+        按扩展名自动选
+    分割层 splitter.rs
       Splitter trait
+        name
+        split
       RecursiveSplitter
-        段落 换行 句子 词 字符
-        可能跨标题
+        段落→句子→词
+        递归降级
+        填满 chunk_size
       MarkdownSplitter
-        CommonMark 块级元素
+        CommonMark 块级
       StructureAwareSplitter
         沿标题层级
-        永不跨标题
-        section 内滑窗
-      SplitterConfig
-        chunk_size 300
-        chunk_overlap 30
-        add_heading_context
+        块不跨标题
+        标题路径
       TokenCounter
         tiktoken cl100k_base
-        真实 token 不是估算
-    Chunk 结构
-      heading_path 标题路径
-      text 正文
-      embedded_text 带前缀 送去做嵌入
-      token_count / char_count
+        真实 token 计数
+    输出契约
+      LoadedDoc
+        source file_name format
+        text page_count loader
+      Chunk
+        source index heading_path
+        text embedded_text
+        token_count char_count
     核心认知
-      Loader 决定拿到什么文本
-      Splitter 决定能检索到什么
-      标题路径是提升召回最有效的单技巧
+      Loader 决定拿到什么
+      Splitter 决定能检索什么
+      标题路径是检索的护城河
+      token 计数不能靠字符估算
+      块 ID 是分块的产物
 ```
+
+---
+
+## 分割流程：从文档到块
+
+```mermaid
+flowchart TB
+    F["原始文件<br/>.md / .pdf / .docx"] --> PICK{"按扩展名选 loader"}
+    PICK --> ML["MarkdownLoader"]
+    PICK --> PL["PdfTextLoader"]
+    PICK --> DL["DoclingLoader"]
+
+    ML --> LD["LoadedDoc<br/>text + format + loader"]
+    PL --> LD
+    DL --> LD
+
+    LD --> SPL{"选 splitter"}
+    SPL -->|默认| RS["RecursiveSplitter<br/>段落→换行→句子→词<br/>递归降级到字符"]
+    SPL -->|markdown| MS["MarkdownSplitter<br/>按 CommonMark 块元素"]
+    SPL -->|结构感知| SAS["StructureAwareSplitter ★<br/>沿标题层级切<br/>块不跨标题"]
+
+    RS --> TC["TokenCounter<br/>tiktoken 真实计数"]
+    MS --> TC
+    SAS --> TC
+
+    TC --> HP{"heading_path<br/>从字节偏移反查"}
+    HP --> CH["Chunk<br/>id = {文件名}#{序号}<br/>text + embedded_text<br/>heading_path + token_count"]
+    CH --> OUT["进入 05-rag<br/>向量化"]
+
+    style SAS fill:#e8f5e9
+    style CH fill:#fff3e0
+    style OUT fill:#e3f2fd
+```
+
+⚠️ **注意 `heading_path` 是从字节偏移反查出来的** ——
+不管用哪个 splitter，块在文档中的位置都能映射回它所属的标题层级。
+这是后面 09-rag-eval 能做「章节 → 块 ID」映射的基础。
 
 ---
 
@@ -526,6 +676,138 @@ tiktoken-rs = "0.12"
 - 向量存储（内存版 / LanceDB / Qdrant）
 - 相似度检索 + 交叉编码器重排
 - 把块拼成 prompt，调用 LLM 生成带引用的答案
+
+## 日志
+
+全仓库统一走 `00-logging`（`agent-logging`）。
+
+```bash
+RUST_LOG=info cargo run -p rag-04 -- pipeline
+RUST_LOG=debug,rag_04=trace cargo run -p rag-04 -- pipeline
+```
+
+| 事件 | 级别 | 关键字段 |
+|---|---|---|
+| 加载文档 | `INFO` | `loader` / `file_count` / `char_count` |
+| 切分 | `INFO` | `splitter` / `chunk_count` / `elapsed_ms` |
+| 单个 Loader / Splitter 的内部过程 | `DEBUG` | `file` / `chunk_size` |
+| 加载失败 / 切分失败 | `ERROR` | `file` / `error` |
+
+---
+## 技术参考速查
+
+### 三种 Loader 对照表
+
+| | MarkdownLoader | PdfTextLoader | DoclingLoader |
+|---|---|---|---|
+| 原理 | 直接读文本 | `pdf-extract` 抽纯文本 | 结构感知 → 转 Markdown |
+| 保留标题 | ✅ | ❌ | ✅ |
+| 保留表格结构 | ⚠️ 部分 | ❌ | ✅ |
+| 保留页码 | ❌ | ✅ | ✅ |
+| 速度 | 最快 | 快 | 慢 |
+| 依赖 | 无 | `pdf-extract` | `docling` |
+
+⚠️ **PdfTextLoader 丢结构**是它的固有限制 —— PDF 里没有「标题」这个概念，
+只有字号和字重。`pdf-extract` 只给你一坨文本流，
+**所以 PDF 场景应该用 DoclingLoader**，否则标题路径整个丢失。
+
+### 三种 Splitter 对照表
+
+| | RecursiveSplitter | MarkdownSplitter | StructureAwareSplitter |
+|---|---|---|---|
+| 切分依据 | 段落→换行→句子→词→字符 | CommonMark 块级元素 | **标题层级** |
+| 块会跨标题吗 | ⚠️ 可能 | ⚠️ 可能 | ❌ **绝不** |
+| `heading_path` | 从偏移反查 | 从偏移反查 | 直接来自 section |
+| 语义完整性 | 一般 | 一般 | **最好** |
+| 块大小均匀度 | **最好** | 一般 | 可能不均（大章节） |
+
+### `text-splitter` 的切分点优先级
+
+```text
+段落 (\n\n)  →  换行 (\n)  →  句子  →  词  →  字形簇  →  字符
+   粗                                                        细
+```
+
+每一级都尽量多塞，**填满 `chunk_size` 个 token 才停**。
+只有当前级别塞不下时，才降级到下一级。
+
+⚠️ 所以「段落」是最优先的切分点 —— 段落边界天然是语义边界。
+这解释了为什么 `RecursiveSplitter` 虽简单，效果却不差。
+
+### Token 计数：为什么必须用真的 tokenizer
+
+```rust
+// ❌ 常见错误：字符数 / 4 估算 token
+let est_tokens = text.len() / 4;
+
+// ✅ 正确：用真实的 BPE tokenizer
+let count = tiktoken::get_encoding("cl100k_base")?.encode(text).len();
+```
+
+⚠️ **中英文差异极大**：中文一个字符 ≈ 1~2 个 token，
+而英文一个字符 ≈ 0.25 个 token。用「字符数 / 4」估算中文会**严重低估**，
+导致块实际远超预算，模型上下文被撑爆。
+
+本项目把 `tiktoken` 的 `cl100k_base` 编码器作为**容量单位**喂给 splitter ——
+切分点在 **token 预算**上选，而不是字符数上。
+
+### `Chunk` 字段的用途对照
+
+| 字段 | 谁在用 | 用途 |
+|---|---|---|
+| `source` | 05/06 | 过滤（只搜某个文件） |
+| `index` | 05/06 | 生成块 ID `{文件名}#{序号}` |
+| `heading_path` | 05~09 | **给检索加上下文**、给评估集做章节映射 |
+| `text` | 05 | 送去做嵌入 |
+| `embedded_text` | 05 | **带标题前缀的**送去做嵌入（见下） |
+| `token_count` | 04/05 | 预算控制 |
+| `char_count` | 04 | 统计展示 |
+
+### `embedded_text` vs `text`：为什么要两个
+
+```text
+text:          "BM25 由 IDF、词频饱和、长度归一化组成。"
+embedded_text: "RAG > 混合检索 > BM25 打分算法\n\nBM25 由 IDF、词频饱和..."
+               └────────────── 标题路径前缀 ──────────────┘
+```
+
+因为**脱离上下文的块语义不完整** ——「长度归一化」这四个字，
+单独看不知道在讲什么；加上标题路径后，嵌入向量才能把它编码到
+「BM25 打分算法」这个语义空间里。
+
+⚠️ 注意：**只有 `embedded_text` 送去嵌入**，`text` 是原文，
+用于展示和生成答案。混用会导致检索到的内容看起来「莫名其妙」。
+
+### 结构感知分割的权衡
+
+```text
+StructureAwareSplitter 的优点：
+  ✅ 块不跨标题 → 语义完整
+  ✅ heading_path 天然准确
+
+代价：
+  ⚠️ 块大小可能不均（一个大章节 → 一个巨大的块）
+  ⚠️ 需要超大 chunk_size 才能容纳大章节
+```
+
+本项目的做法是：**章节超预算时才细分**（按句子降级），
+保证「不跨标题」这个硬约束优先于「块大小均匀」这个软目标。
+
+### 块 ID 的脆弱性（09-rag-eval 的教训）
+
+```text
+块 ID = "{文件名}#{块序号}"
+                  ▲
+                  └── 由分块配置决定！
+```
+
+改一下 `chunk_size`，同一个段落的块序号就变了 ——
+**所有基于块 ID 的标注全部失效，召回率恒为 0，而且没有任何报错**。
+
+这就是 09-rag-eval 改用 `relevant_sections`（章节标题）标注的原因：
+**标题是文档的事实，块 ID 是分块的产物**。
+
+---
 
 ## 七、Makefile
 

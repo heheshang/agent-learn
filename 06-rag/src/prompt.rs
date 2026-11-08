@@ -41,6 +41,7 @@
 //! 本项目保留这个朴素行为，并在 README 里对比说明。
 
 use crate::retrieval::RetrievalResult;
+use agent_logging::debug;
 
 /// 组装好的 Prompt。
 #[derive(Debug, Clone)]
@@ -88,8 +89,13 @@ pub fn assemble(result: &RetrievalResult, question: &str) -> AssembledPrompt {
         context
     };
 
-    let user = format!(
-        "【参考资料】\n{context_section}\n\n【问题】\n{question}",
+    let user = format!("【参考资料】\n{context_section}\n\n【问题】\n{question}",);
+
+    debug!(
+        chunk_count = result.chunks.len(),
+        context_chars = context_section.chars().count(),
+        question_chars = question.chars().count(),
+        "Prompt 组装完成"
     );
 
     AssembledPrompt {

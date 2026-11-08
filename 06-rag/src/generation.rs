@@ -27,8 +27,9 @@
 //!
 //! 只有第 1 步，答案是「看起来带引用」；两步都做，引用才能点击、核对。
 
-use genai::chat::{ChatMessage, ChatOptions, ChatRequest};
+use agent_logging::{debug, info, warn};
 use genai::Client;
+use genai::chat::{ChatMessage, ChatOptions, ChatRequest};
 use serde::{Deserialize, Serialize};
 
 use crate::config::GenerationConfig;
@@ -130,11 +131,21 @@ impl Generator {
             ChatMessage::user(&prompt.user),
         ]);
 
+        debug!(
+            model = %self.config.model,
+            system_len = prompt.system.chars().count(),
+            user_len = prompt.user.chars().count(),
+            "发起模型生成请求"
+        );
+
         let response = self
             .client
             .exec_chat(&self.config.model, request, Some(&options))
             .await
-            .map_err(|e| RagError::Generation(format!("调用模型失败: {e}")))?;
+            .map_err(|e| {
+                warn!(model = %self.config.model, error = %e, "模型调用失败");
+                RagError::Generation(format!("调用模型失败: {e}"))
+            })?;
 
         Ok(response.into_first_text().unwrap_or_default())
     }
@@ -156,14 +167,38 @@ impl Generator {
             .with_temperature(self.config.temperature)
             .with_max_tokens(self.config.max_tokens);
 
+        debug!(
+            model = %self.config.model,
+            chunk_count = retrieval.chunks.len(),
+            "发起带引用的生成请求"
+        );
+
         let response = self
             .client
             .exec_chat(&self.config.model, request, Some(&options))
             .await
-            .map_err(|e| RagError::Generation(format!("调用模型失败: {e}")))?;
+            .map_err(|e| {
+                warn!(model = %self.config.model, error = %e, "模型调用失败");
+                RagError::Generation(format!("调用模型失败: {e}"))
+            })?;
 
         let answer = response.first_text().unwrap_or_default().to_string();
         let citations = extract_citations(&answer, retrieval);
+
+        info!(
+            model = %self.config.model,
+            answer_chars = answer.chars().count(),
+            citation_count = citations.len(),
+            prompt_tokens = response.usage.prompt_tokens.unwrap_or(0),
+            completion_tokens = response.usage.completion_tokens.unwrap_or(0),
+            "生成完成"
+        );
+
+        // 没有引用是个**信号** —— 说明模型可能凭先验知识答的，
+        // 而不是基于检索到的资料。值得单独 warn 一行。
+        if citations.is_empty() {
+            warn!("答案里没有任何引用标记 —— 模型可能没有依据检索资料作答");
+        }
 
         Ok(GenerationResult {
             answer,

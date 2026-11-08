@@ -4,6 +4,7 @@
 这类框架** —— 每一层都自己实现，把「框架帮你藏起来的东西」摊开来看。
 
 ```text
+00-logging  共享日志设施（统一初始化 / 请求追踪 / 结构化宏）
 01-axum   HTTP 服务基础（路由 / 处理器 / 状态 / 错误）
 02-rig    Rust 的 AI 编排框架（rig）
 03-genai  多厂商 LLM 调用 + 工具 + Agent 循环（genai）
@@ -16,6 +17,8 @@
 10-rag-milvus RAG Part 7：生产级向量数据库（Milvus / Qdrant）+ 服务端混合检索
 11-rag-advance RAG Part 8：高级文档处理（表格几何还原 / 图片抽取 / 结构感知分块）
 12-rag-summary RAG Part 9：摘要式 RAG（混合检索 + Reranker + Milvus + 上下文压缩）
+13-agent-core Agent 核心概念：ReAct 循环 + 工具协议 + 三模式消融
+14-agent-tool 自定义工具开发：工具契约 + Schema 校验 + MCP 协议
 ```
 
 ## 思维导图：整个仓库
@@ -80,6 +83,19 @@ mindmap
         交叉编码器重排
         上下文压缩
         消融阶梯
+      13-agent-core Agent 核心
+        ReAct 循环
+        Thought Action
+        Action Input
+        Observation
+        工具协议
+        三模式消融
+      14-agent-tool 自定义工具
+        工具三件套
+        Schema 校验
+        失败转观察
+        MCP 协议
+        return_direct
     核心认知
       Loader 决定拿到什么
       Splitter 决定能检索什么
@@ -89,6 +105,14 @@ mindmap
       重排是精度来源
       收益靠差值证明
       评估集是地基
+      思考与行动要交织
+      谁决定检索时机
+      解析模型输出要容错
+      工具描述是行为不是文档
+      工具失败要能自我纠正
+      参数错了别发请求
+      工具来源与用法解耦
+      真实对话要与示例分开
 ```
 
 ## 全局架构全景
@@ -96,6 +120,7 @@ mindmap
 ```mermaid
 graph TB
     subgraph L0["基础设施层"]
+        LOG["00-logging<br/>统一日志初始化 / 请求追踪"]
         AX["01-axum<br/>HTTP 路由 / 状态 / 错误"]
         RG["02-rig<br/>Agent 编排框架"]
         GN["03-genai<br/>多厂商 LLM 客户端"]
@@ -137,13 +162,26 @@ graph TB
         R12["12-rag-summary<br/>Milvus 混合检索 + 交叉编码器重排<br/>上下文压缩 · 消融阶梯"]
     end
 
+    subgraph L10["Agent 核心概念"]
+        R13["13-agent-core<br/>ReAct 循环 + 工具协议<br/>输出解析器 · 三模式消融"]
+    end
+
+    subgraph L11["自定义工具开发"]
+        R14["14-agent-tool<br/>工具契约 + Schema 校验<br/>天气工具 · MCP 协议"]
+    end
+
     R4 --> R5 --> R6 --> R7 --> R8 --> R9
     R5 -.向量存储抽象.-> R10
     R9 -.指标体系.-> R10
     R11 -.产出的块.-> R5
     R12 -.集成前面全部能力.-> R5 & R6 & R7 & R8 & R9 & R10
-    AX -.HTTP 层复用到.-> R6 & R7 & R8 & R9 & R10 & R11 & R12
-    GN -.LLM 客户端.-> R6 & R7 & R8 & R9
+    R13 -.工具底座复用.-> R8
+    R13 -.LLM 抽象复用.-> R7
+    R14 -.ReAct 引擎复用.-> R13
+    R14 -.LLM 抽象复用.-> R7
+    AX -.HTTP 层复用到.-> R6 & R7 & R8 & R9 & R10 & R11 & R12 & R13 & R14
+    LOG -.日志设施复用到.-> AX & R6 & R7 & R8 & R9 & R10 & R11 & R12 & R13 & R14
+    GN -.LLM 客户端.-> R6 & R7 & R8 & R9 & R13 & R14
     RG -.Agent 模式.-> R6
 
     style R6 fill:#e8f5e9
@@ -152,6 +190,8 @@ graph TB
     style R10 fill:#e1f5fe
     style R11 fill:#fce4ec
     style R12 fill:#d1c4e9
+    style R13 fill:#fff9c4
+    style R14 fill:#d0ebff
 ```
 
 ### RAG 主线数据流（离线索引 + 在线查询）
@@ -236,12 +276,27 @@ graph TB
         G3["五档消融阶梯<br/>每步收益可归因"]
     end
 
+    subgraph S7["13-agent-core · 解决 「流程写死，模型没话语权」"]
+        H1["ReAct 循环<br/>思考与行动交织"]
+        H2["工具协议<br/>search + calculate"]
+        H3["三模式消融<br/>direct / act_only / react"]
+    end
+
+    subgraph S8["14-agent-tool · 解决 「怎么给 Agent 加工具」"]
+        I1["工具契约<br/>名字 + 描述 + Schema"]
+        I2["参数本地校验<br/>错了别发请求"]
+        I3["失败转观察<br/>让模型自我纠正"]
+        I4["MCP 协议<br/>来源与用法解耦"]
+    end
+
     S0 -->|"人话 ≠ 文档语言"| S1
     S1 -->|向量对精确词弱| S2
     S2 -->|收益要量化| S3
     S3 -->|指标要能选型| S4
     S4 -->|文档都是规整的?| S5
     S5 -->|能力有了,怎么攒起来?| S6
+    S6 -->|"检索流程还是写死的?"| S7
+    S7 -->|"工具太糙,模型老调错"| S8
 
     style S0 fill:#ffebee
     style S1 fill:#e8f5e9
@@ -250,6 +305,8 @@ graph TB
     style S4 fill:#e1f5fe
     style S5 fill:#fce4ec
     style S6 fill:#d1c4e9
+    style S7 fill:#fff9c4
+    style S8 fill:#d0ebff
 ```
 
 ### 知识地图：整个仓库
@@ -459,6 +516,41 @@ graph LR
         N98 --> N99
     end
     N1 --> N98
+    subgraph N106["Agent 核心概念"]
+        subgraph N107["13-agent-core"]
+            N108["ReAct 循环"]
+            N107 --> N108
+            N109["Thought / Action"]
+            N107 --> N109
+            N110["Action Input"]
+            N107 --> N110
+            N111["Observation"]
+            N107 --> N111
+            N112["工具协议"]
+            N107 --> N112
+            N113["输出解析器"]
+            N107 --> N113
+            N114["三模式消融"]
+            N107 --> N114
+        end
+        N106 --> N107
+        subgraph N118["14-agent-tool"]
+            N119["工具三件套"]
+            N118 --> N119
+            N120["Schema 校验器"]
+            N118 --> N120
+            N121["失败转观察"]
+            N118 --> N121
+            N122["MCP 客户端"]
+            N118 --> N122
+            N123["MCP 服务器"]
+            N118 --> N123
+            N124["return_direct"]
+            N118 --> N124
+        end
+        N106 --> N118
+    end
+    N1 --> N106
     subgraph N69["核心认知"]
         N70["Loader 决定拿到什么"]
         N69 --> N70
@@ -490,9 +582,74 @@ graph LR
         N69 --> N96
         N97["差值要可归因就得一次只加一样"]
         N69 --> N97
+        N115["思考与行动要交织"]
+        N69 --> N115
+        N116["谁决定检索时机"]
+        N69 --> N116
+        N117["解析模型输出要容错"]
+        N69 --> N117
+        N125["工具描述是行为不是文档"]
+        N69 --> N125
+        N126["工具失败要能自我纠正"]
+        N69 --> N126
+        N127["参数错了别发请求"]
+        N69 --> N127
+        N128["工具来源与用法解耦"]
+        N69 --> N128
+        N129["真实对话要与示例分开"]
+        N69 --> N129
     end
     N1 --> N69
 ```
+
+## 日志约定（贯穿全仓库）
+
+全仓库 14 个项目共用一个 workspace 成员 crate：**`00-logging`（`agent-logging`）**。
+
+```text
+00-logging
+├── init(service)              初始化全局 subscriber（一次）
+├── trace_layer()              HTTP 请求追踪中间件
+├── stage_guard(name)          阶段耗时守卫
+└── info! / debug! / warn! / error! / trace!   结构化宏再导出
+```
+
+### 三个核心能力
+
+| 能力 | 作用 |
+|---|---|
+| `init("rag-06")` | 一次性设置格式 / 级别 / 来源；`service=` 字段区分多项目日志 |
+| `trace_layer()` | 每个 HTTP 请求开一个 span，字段含 `request_id` / `method` / `path` / `status` / `elapsed_ms` |
+| `stage_guard("索引构建")` | 阶段耗时守卫 —— 进入时打日志，退出时打耗时 |
+
+### 级别语义（全仓库统一）
+
+| 级别 | 用途 | 典型场景 |
+|---|---|---|
+| `ERROR` | 请求失败、服务不可用 | LLM 调用失败、索引加载失败 |
+| `WARN` | 能兜住但不该发生 | 参数非法、工具执行失败、链路降级 |
+| `INFO` | 关键业务节点 | 服务启动、索引就绪、一次请求的最终结果 |
+| `DEBUG` | 过程细节 | 召回了哪些块、重排分数、上下文压缩前后对比 |
+| `TRACE` | 逐行细节 | 每条候选块的原始分值 |
+
+### 过滤
+
+```bash
+RUST_LOG=info                          # 全局 info
+RUST_LOG=debug,rag_06=trace            # 某个项目单独开到 trace
+RUST_LOG=warn,rag_12::retriever=debug  # 只对某个模块开 debug
+```
+
+不设 `RUST_LOG` 时用各项目传入的默认级别（一般是 `info`）。
+
+### 三条硬约定
+
+1. **4xx 用 `warn!`，5xx 用 `error!`** —— 告警不能被 4xx 淹没。
+2. **降级必须打 `warn!`** —— 降级是「能兜住但不该发生」，静默降级等于埋雷。
+3. **不打 `println!` 混进业务逻辑** —— `println!` 没法按模块关掉，
+   debug 输出一旦写进去就永远在生产路径上。
+
+---
 
 ## RAG 主线
 
@@ -543,6 +700,8 @@ graph LR
 | [10-rag-milvus](10-rag-milvus/) | 索引扛不住生产流量 | **把索引搬进独立服务；集群复杂度来自读写职责的清晰划分，而不是组件多** |
 | [11-rag-advance](11-rag-advance/) | 文档里有表格和图 | **PDF 里只有坐标没有表格；压平即语义丢失；几何还原比跑模型快且免费** |
 | [12-rag-summary](12-rag-summary/) | 能力有了，攒不成系统 | **摘要场景上下文越短越好；差值要可归因就得一次只加一样；服务端融合分数不可拆** |
+| [13-agent-core](13-agent-core/) | 检索流程写死，模型没话语权 | **ReAct 把思考与行动交织；谁来决定检索时机才是 RAG 与 Agent 的分水岭；解析模型输出是一半工作量** |
+| [14-agent-tool](14-agent-tool/) | 工具太糙，模型老调错 | **工具描述是模型行为的一部分，不是文档；工具失败要能自我纠正；工具来源与使用方式可以解耦** |
 
 ## 快速开始
 
@@ -574,6 +733,16 @@ make compare-12                    # 12-rag-summary：五档消融阶梯同题�
 make eval-12                       # 12-rag-summary：跑评估集出消融报告 ★
 make serve-12                      # 启动 12-rag-summary 服务（:3050）
 
+# 13-agent-core：ReAct Agent
+make compare-13                    # 13-agent-core：三模式消融对照（direct/act_only/react）★
+make serve-13                      # 启动 13-agent-core 服务（:3060）
+
+# 14-agent-tool：自定义工具 + MCP
+make compare-14                    # 14-agent-tool：三模式消融对照 ★
+make serve-14                      # 启动 14-agent-tool 服务（:3070）
+make mcp-14                        # 启动内置 MCP 服务器（:3071）★
+make call-14 LOCATION="上海"        # 直接调天气工具（不经模型）★
+
 # 各模块独立运行
 cargo run -p axum-01                    # HTTP 服务
 cargo run -p rag-04 -- pipeline         # 加载 + 分割
@@ -587,6 +756,11 @@ cargo run -p rag-10 -- compare          # Milvus vs Qdrant 同题对照
 cargo run -p rag-11 -- compare          # 几何还原 vs 压平对照
 cargo run -p rag-12 -- compare          # 五档消融阶梯同题对照
 cargo run -p rag-12 -- eval             # 跑评估集出消融报告
+cargo run -p agent-13 -- compare        # 三模式消融对照（ReAct 收益量化）
+cargo run -p agent-13 -- run            # 跑一次 Agent（ReAct 循环）
+cargo run -p agent-14 -- tools          # 工具清单 + 参数校验演示（不联网）
+cargo run -p agent-14 -- call get_weather '{"location":"北京"}'  # 直接调工具
+cargo run -p agent-14 -- compare        # 三模式消融对照（工具收益量化）
 
 # 测试
 cargo test --workspace
@@ -631,6 +805,9 @@ cd 08-rag && make help
 | 文档解析 | `docling-pdf` / `lopdf` | 几何聚类 | PDF 里**只有坐标没有表格** |
 | 上下文压缩 | 自实现 | 抽取式 + token 预算 | 摘要场景里**上下文越短越好** |
 | 消融实验 | 自实现 | 五档阶梯 | 一次只加一个增强，差值才**可归因** |
+| Agent 循环 | 自实现 | ReAct 文本协议 | 思考与行动**交织**；解析模型输出是一半工作量 |
+| 工具契约 | 自实现 | Tool trait / JSON Schema | 描述是**行为**不是文档；参数错了**别发请求** |
+| 工具协议 | 自实现 | MCP / JSON-RPC 2.0 | 工具**来源**与使用方式**解耦**；camelCase 字段要 `rename` |
 
 ### 贯穿全仓库的六条设计原则
 
@@ -670,6 +847,9 @@ cd 08-rag && make help
 | 10-rag-milvus | 3030 | `make serve-10` |
 | 11-rag-advance | 3040 | `make serve-11` |
 | 12-rag-summary | 3050 | `make serve-12` |
+| 13-agent-core | 3060 | `make serve-13` |
+| 14-agent-tool | 3070 | `make serve-14` |
+| 14-agent-tool（MCP） | 3071 | `make mcp-14` |
 
 ### 常见环境变量前缀
 
@@ -683,6 +863,8 @@ cd 08-rag && make help
 | `MILVUS_` | 10-rag-milvus | 向量库连接配置 |
 | `ADVANCE_` | 11-rag-advance | 文档解析配置 |
 | `SUMMARY_` | 12-rag-summary | 检索 / 重排 / 压缩配置 |
+| `AGENT_` | 13-agent-core | Agent 循环 / 模式 / 步数配置 |
+| `TOOL_` | 14-agent-tool | 工具 / MCP / 步数配置 |
 
 ### 文档维护
 
@@ -719,4 +901,8 @@ make check-mermaid    # 校验所有 README 的 mermaid 图能正常渲染
 ⑪ 11-rag-advance 搞懂「文档不规整怎么办」
        ↓
 ⑫ 12-rag-summary 搞懂「能力怎么攒成一个系统」
+       ↓
+⑬ 13-agent-core 搞懂「Agent 怎么自己决定做什么」
+       ↓
+⑭ 14-agent-tool 搞懂「怎么给 Agent 加工具」
 ```

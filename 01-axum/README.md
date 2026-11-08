@@ -25,7 +25,7 @@ src/
 ```mermaid
 graph TB
     subgraph Client["客户端"]
-        C[curl / 浏览器 / 上游服务]
+        C["curl / 浏览器 / 上游服务"]
     end
 
     subgraph Server["axum 服务进程"]
@@ -36,8 +36,8 @@ graph TB
         end
 
         subgraph Router["路由层 routes.rs"]
-            R0[GET /]
-            R1[GET /health]
+            R0["GET /"]
+            R1["GET /health"]
             R2["GET /users<br/>POST /users"]
             R3["GET /users/{id}<br/>DELETE /users/{id}"]
         end
@@ -45,15 +45,15 @@ graph TB
         subgraph Handlers["处理器层 handlers.rs"]
             H0[root]
             H1[health]
-            H2[list_users<br/>create_user]
-            H3[get_user<br/>delete_user]
+            H2["list_users<br/>create_user"]
+            H3["get_user<br/>delete_user"]
         end
 
         subgraph Extractors["提取器 Extractor"]
-            E1[State&lt;AppState&gt;]
-            E2[Path&lt;u64&gt;]
-            E3[Query&lt;Pagination&gt;]
-            E4[Json&lt;CreateUser&gt;]
+            E1["State&lt;AppState&gt;"]
+            E2["Path&lt;u64&gt;"]
+            E3["Query&lt;Pagination&gt;"]
+            E4["Json&lt;CreateUser&gt;"]
         end
 
         subgraph State["共享状态 AppState"]
@@ -109,35 +109,118 @@ sequenceDiagram
     end
 ```
 
-### 思维导图：axum 的四层结构
+### 知识地图：axum 的四层结构
+
+```mermaid
+graph LR
+    N1(("axum<br/>HTTP 服务"))
+    subgraph N2["路由层"]
+        N3["Router::new"]
+        N2 --> N3
+        N4["route 路径+方法"]
+        N2 --> N4
+        N5["MethodRouter 串联"]
+        N2 --> N5
+        N6["with_state 注入状态"]
+        N2 --> N6
+    end
+    N1 --> N2
+    subgraph N7["处理器层"]
+        N8["async fn"]
+        N7 --> N8
+        N9["第一个参数是 Extractor"]
+        N7 --> N9
+        N10["返回 impl IntoResponse"]
+        N7 --> N10
+        N11["Result 表达可失败"]
+        N7 --> N11
+    end
+    N1 --> N7
+    subgraph N12["提取器"]
+        N13["State 共享状态"]
+        N12 --> N13
+        N14["Path 路径参数"]
+        N12 --> N14
+        N15["Query 查询参数"]
+        N12 --> N15
+        N16["Json 请求体"]
+        N12 --> N16
+    end
+    N1 --> N12
+    subgraph N17["状态"]
+        N18["Arc + Mutex + UserStore"]
+        N17 --> N18
+        N19["跨请求共享"]
+        N17 --> N19
+        N20["锁粒度到表"]
+        N17 --> N20
+    end
+    N1 --> N17
+    subgraph N21["错误"]
+        N22["AppError 自定义"]
+        N21 --> N22
+        N23["IntoResponse 实现"]
+        N21 --> N23
+        N24["统一 JSON 结构"]
+        N21 --> N24
+        N25["400 / 404"]
+        N21 --> N25
+    end
+    N1 --> N21
+    subgraph N26["核心认知"]
+        N27["路由负责匹配"]
+        N26 --> N27
+        N28["处理器负责逻辑"]
+        N26 --> N28
+        N29["提取器负责拆包"]
+        N26 --> N29
+        N30["状态负责共享"]
+        N26 --> N30
+        N31["错误负责表达"]
+        N26 --> N31
+    end
+    N1 --> N26
+```
+
+## 思维导图：axum 的概念地图
 
 ```mermaid
 mindmap
-  root((axum<br/>HTTP 服务))
-    路由层
-      Router::new
+  root((axum 0.8))
+    路由层 Router
       route 路径+方法
       MethodRouter 串联
-      with_state 注入状态
-    处理器层
+      with_state 注入
+      nest 嵌套路由
+      merge 合并路由
+    处理器 Handler
       async fn
       第一个参数是 Extractor
       返回 impl IntoResponse
       Result 表达可失败
-    提取器
+    提取器 Extractor
       State 共享状态
       Path 路径参数
       Query 查询参数
       Json 请求体
-    状态
-      Arc + Mutex + UserStore
-      跨请求共享
-      锁粒度到表
-    错误
-      AppError 自定义
+      Form 表单
+      Header 请求头
+      只有 Json 能消费 body
+    状态 State
+      Arc 引用计数
+      Mutex 互斥
+      tokio RwLock 并发读
+      Send + Sync 约束
+    错误 Error
+      自定义错误类型
       IntoResponse 实现
       统一 JSON 结构
-      400 / 404
+      状态码映射
+    中间件 Middleware
+      TraceLayer 追踪
+      TimeoutLayer 超时
+      RequestBodyLimitLayer 限流
+      CorsLayer 跨域
     核心认知
       路由负责匹配
       处理器负责逻辑
@@ -244,6 +327,102 @@ curl -s -X POST localhost:3000/users \
   -d '{"name":"Carlos","age":28}'
 curl -s -X DELETE localhost:3000/users/3
 ```
+
+## 日志
+
+全仓库统一走 `00-logging`（`agent-logging`）。
+
+```bash
+RUST_LOG=info cargo run -p axum-01
+RUST_LOG=debug,axum_01=trace cargo run -p axum-01
+```
+
+| 事件 | 级别 | 关键字段 |
+|---|---|---|
+| 服务启动 | `INFO` | `addr` |
+| 每个 HTTP 请求 | `INFO`（span 内） | `request_id` / `method` / `path` / `status` / `elapsed_ms` |
+| 处理器内部的处理步骤 | `DEBUG` | 视具体端点而定 |
+
+`trace_layer()` 会在每个请求上开一个 span —— 一次请求触发的所有日志
+自动带上同一个 `request_id`，能串起来。
+
+---
+## 技术参考速查
+
+### 提取器速查表
+
+| 提取器 | 数据来源 | 位置 | 能消费 body？ | 典型用法 |
+|---|---|---|---|---|
+| `State<T>` | 路由器注入的共享状态 | 参数 | ❌ | `State(state): State<AppState>` |
+| `Path<T>` | 路径参数 `/users/{id}` | 参数 | ❌ | `Path(id): Path<u64>` |
+| `Query<T>` | 查询串 `?page=1` | 参数 | ❌ | `Query(p): Query<Pagination>` |
+| `Json<T>` | 请求体（application/json） | 参数 | ✅ | `Json(b): Json<CreateUser>` |
+| `Form<T>` | 请求体（form-urlencoded） | 参数 | ✅ | `Form(f): Form<Login>` |
+| `Header<T>` | 请求头 | 参数 | ❌ | `Header(h): Header<UserAgent>` |
+| `Extension<T>` | 请求扩展 | 参数 | ❌ | `Extension(e): Extension<Ctx>` |
+
+⚠️ **消费 body 的提取器有且只能有一个** —— body 是一次性的流，不能读两遍。
+
+### 处理器返回类型速查
+
+| 返回类型 | 效果 |
+|---|---|
+| `Json<T>` | 200 + `application/json` |
+| `String` / `&'static str` | 200 + `text/plain` |
+| `StatusCode` | 状态码，无 body |
+| `(StatusCode, Json<T>)` | 自定义状态码 + body |
+| `impl IntoResponse` | 任意组合 |
+| `Result<T, E>` | `Ok` 正常，`Err` 交给 `E: IntoResponse` |
+
+### 常见中间件
+
+| 中间件 | 作用 | 04~10 项目的用法 |
+|---|---|---|
+| `TraceLayer` | 打印方法、路径、耗时 | 全部使用 |
+| `TimeoutLayer` | 超时返回 504 | 06~10 使用（**超时值随负载递增**） |
+| `RequestBodyLimitLayer` | 限制请求体大小 | 全部使用（1MB） |
+| `CorsLayer` | 跨域 | 未使用 |
+
+### 状态码语义
+
+| 码 | 含义 | 本项目用法 |
+|---|---|---|
+| 200 | 成功 | 查询成功 |
+| 201 | 已创建 | `POST /users` |
+| 204 | 无内容 | `DELETE /users/{id}` |
+| 400 | 请求有误 | 参数非法 / JSON 解析失败 |
+| 404 | 资源不存在 | 用户不存在 |
+| 422 | 语义错误 | 业务校验失败 |
+| 500 | 服务端错误 | 未预期异常 |
+| 504 | 网关超时 | `TimeoutLayer` 触发 |
+
+### 为什么用 `Arc<Mutex<_>>` 而不是 `Arc<RwLock<_>>`？
+
+| | `Mutex` | `RwLock` |
+|---|---|---|
+| 读并发 | ❌ 独占 | ✅ 多读一写 |
+| 复杂度 | 简单 | 略高（tokio 版要 `.await`） |
+| 适用 | 写多 / 临界区短 | 读多 / 临界区长 |
+
+`01-axum` 的 `UserStore` 操作极短，用 `Mutex` 足够。
+**真正需要考虑的是**：如果换成 `tokio::sync::RwLock`，`lock()` 会变成 `.await`，
+处理器签名也要跟着变 —— 这是「同步锁 vs 异步锁」的经典取舍。
+
+### ⚠️ 处理器必须 `Send + Sync`
+
+因为 axum 的 handler 要能跨线程移动（多线程运行时）。
+
+所以 `AppState` 里的东西必须满足：
+
+```rust
+// Arc<Mutex<UserStore>> 之所以能用，
+// 是因为 UserStore: Send，Mutex<T>: Send + Sync。
+// 如果 UserStore 里塞了 Rc<RefCell<_>>，编译直接报错。
+```
+
+这是 Rust 类型系统帮你挡掉的一类并发 bug —— **报错发生在编译期，不是运行时**。
+
+---
 
 ## Makefile
 

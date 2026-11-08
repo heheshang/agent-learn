@@ -34,6 +34,7 @@
 //!
 //! 所以 12 的报告可以和 09 的报告**直接对比** —— 同一套尺子。
 
+use agent_logging::{debug, info, warn};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -217,11 +218,18 @@ impl AblationRunner {
         let mut reports = Vec::with_capacity(modes.len());
 
         for mode in modes {
+            info!(variant = mode.name(), "开始跑消融变体");
             let result = self.run_variant_limited(dataset, *mode, limit).await?;
             reports.push(result);
         }
 
         let steps = build_steps(&reports);
+
+        info!(
+            variant_count = reports.len(),
+            step_count = steps.len(),
+            "消融阶梯跑完"
+        );
 
         Ok(AblationResult { reports, steps })
     }
@@ -245,6 +253,14 @@ impl AblationRunner {
         let start = Instant::now();
 
         let (contexts, failed) = self.run_cases(dataset, mode, limit).await?;
+
+        info!(
+            variant = mode.name(),
+            case_count = contexts.len(),
+            failed,
+            elapsed_ms = start.elapsed().as_millis() as u64,
+            "变体评估完成"
+        );
 
         let title = format!("12-rag-summary · {} 评估", mode.name());
         let report = self
@@ -328,6 +344,7 @@ impl AblationRunner {
                 Err(e) => {
                     failed += 1;
                     eprintln!("  ⚠ 评估任务失败: {e}");
+                    warn!(error = %e, "评估任务失败");
                 }
             }
         }
@@ -364,6 +381,13 @@ async fn run_one(
     mode: SearchMode,
 ) -> RagResult<RunOutput> {
     let outcome = pipeline.ask_with(question, mode).await?;
+
+    debug!(
+        mode = mode.name(),
+        answer_len = outcome.answer.chars().count(),
+        passages = outcome.compression.stats.passages.len(),
+        "样本问答完成"
+    );
 
     Ok(RunOutput {
         answer: outcome.answer,

@@ -1,8 +1,9 @@
+use agent_logging::{debug, info, warn};
 use axum::{
+    Json,
     extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
-    Json,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -33,8 +34,14 @@ impl AppError {
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
-        let status =
-            StatusCode::from_u16(self.code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+        let status = StatusCode::from_u16(self.code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+        // 4xx 是调用方的问题，5xx 才是服务端的问题 —— 级别要分开，
+        // 否则告警规则没法区分「用户传错了」和「服务坏了」。
+        if self.code >= 500 {
+            agent_logging::error!(code = self.code, message = %self.message, "请求处理失败");
+        } else {
+            warn!(code = self.code, message = %self.message, "请求被拒绝");
+        }
         (
             status,
             Json(serde_json::json!({
@@ -130,12 +137,24 @@ pub async fn list_users(
     State(state): State<AppState>,
     Query(pagination): Query<Pagination>,
 ) -> Json<Vec<User>> {
+    debug!(
+        page = pagination.page,
+        size = pagination.size,
+        "查询用户列表"
+    );
+
     let store = state.lock().expect("获取用户存储锁失败");
     let mut users: Vec<User> = store.users.values().cloned().collect();
     users.sort_by_key(|u| u.id);
 
     let start = ((pagination.page.saturating_sub(1)) * pagination.size) as usize;
-    Json(users.into_iter().skip(start).take(pagination.size as usize).collect())
+    let page: Vec<User> = users
+        .into_iter()
+        .skip(start)
+        .take(pagination.size as usize)
+        .collect();
+    debug!(count = page.len(), "用户列表已生成");
+    Json(page)
 }
 
 /// GET /users/{id} —— 按 id 查询单个用户
@@ -143,6 +162,8 @@ pub async fn get_user(
     State(state): State<AppState>,
     Path(id): Path<u64>,
 ) -> Result<Json<User>, AppError> {
+    debug!(user_id = id, "查询单个用户");
+
     let store = state.lock().expect("获取用户存储锁失败");
     store
         .users
@@ -171,6 +192,7 @@ pub async fn create_user(
     };
     store.users.insert(id, user.clone());
 
+    info!(user_id = id, name = %user.name, age = user.age, "用户已创建");
     Ok((StatusCode::CREATED, Json(user)))
 }
 
@@ -179,10 +201,15 @@ pub async fn delete_user(
     State(state): State<AppState>,
     Path(id): Path<u64>,
 ) -> Result<StatusCode, AppError> {
+    debug!(user_id = id, "删除用户");
+
     let mut store = state.lock().expect("获取用户存储锁失败");
     store
         .users
         .remove(&id)
-        .map(|_| StatusCode::NO_CONTENT)
+        .map(|user| {
+            info!(user_id = id, name = %user.name, "用户已删除");
+            StatusCode::NO_CONTENT
+        })
         .ok_or_else(|| AppError::not_found(format!("用户 {id} 不存在")))
 }

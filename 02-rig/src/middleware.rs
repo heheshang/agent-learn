@@ -17,6 +17,7 @@
 //! （选模型、改请求、拦截工具调用），`HttpMiddleware` 工作在**线缆层**
 //! （每个 HTTP 请求）。两者互不替代。
 
+use agent_logging::{debug, info};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -49,12 +50,14 @@ impl HttpMiddleware for LatencyLogger {
         _headers: &'a HeaderMap,
     ) -> WasmBoxedFuture<'a, Result<(), Error>> {
         let count = self.requests.fetch_add(1, Ordering::SeqCst) + 1;
-        println!(
-            "[middleware] #{} {} {} -> {}",
-            count,
-            exchange.method,
-            exchange.uri.path(),
-            status.as_u16()
+        // 这是「线上真正发出的 HTTP 请求」这一层的日志 ——
+        // 和 agent 层的「调了几轮模型」是不同粒度。
+        info!(
+            seq = count,
+            method = %exchange.method,
+            path = %exchange.uri.path(),
+            status = status.as_u16(),
+            "上游模型请求完成"
         );
         Box::pin(async { Ok(()) })
     }
@@ -77,6 +80,7 @@ impl HttpMiddleware for TraceHeader {
         if let Ok(value) = HeaderValue::from_str(&self.tag) {
             headers.insert("x-trace-tag", value);
         }
+        debug!(tag = %self.tag, "已注入 x-trace-tag 请求头");
         Box::pin(async { Ok(()) })
     }
 }
@@ -104,10 +108,12 @@ pub async fn middleware_demo() -> anyhow::Result<()> {
     let model = client.completion(rig::providers::deepseek::DEEPSEEK_V4_FLASH);
 
     let request = rig::completion::CompletionRequest::new("用一句话说明什么是所有权。");
+    info!("发起 middleware 演示用的模型调用");
     let response = model.call(request).await?;
 
     println!("=== Middleware ===");
     println!("回复: {}", response.text());
     println!("middleware 观察到的请求数: {}", logger.requests());
+    info!(requests = logger.requests(), "middleware 演示结束");
     Ok(())
 }

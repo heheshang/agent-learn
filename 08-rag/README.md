@@ -33,6 +33,9 @@ make test      # 单元 + 集成测试（不调 LLM）
 
 > 也可直接 `cargo run -p rag-08 -- demo` 等，`make` 只是包了一层。
 
+⚠️ **重排很吃 CPU** —— debug 构建下 11 个候选要 ~6 秒，release 下 ~0.85 秒。
+**用 release 构建跑 demo / 生产部署**：`cargo run --release -p rag-08 -- compare`。
+
 首次运行会下载两个模型到 workspace 根目录的 `.fastembed_cache/`：
 
 | 模型 | 用途 | 大小 |
@@ -221,56 +224,206 @@ graph TB
     style R1 fill:#ffebee
 ```
 
-### 思维导图：混合检索与重排的知识地图
+### 知识地图：混合检索与重排
+
+```mermaid
+graph LR
+    N1(("08-rag<br/>混合检索 + 重排"))
+    subgraph N2["分词 tokenize"]
+        N3["拉丁串 小写整词"]
+        N2 --> N3
+        N4["CJK unigram + bigram"]
+        N2 --> N4
+        N5["bigram 保留词序"]
+        N2 --> N5
+        N6["标点当分隔符"]
+        N2 --> N6
+    end
+    N1 --> N2
+    subgraph N7["BM25 稀疏检索"]
+        subgraph N8["打分公式"]
+            N9["IDF 词稀有度"]
+            N8 --> N9
+            N10["词频饱和 k1 = 1.2"]
+            N8 --> N10
+            N11["长度归一化 b = 0.75"]
+            N8 --> N11
+        end
+        N7 --> N8
+        N12["倒排索引"]
+        N7 --> N12
+        N13["失败模式 对罕见 token 弱"]
+        N7 --> N13
+    end
+    N1 --> N7
+    subgraph N14["向量稠密检索"]
+        N15["复用 05-rag"]
+        N14 --> N15
+        N16["L2 归一化"]
+        N14 --> N16
+        N17["失败模式 对精确词弱"]
+        N14 --> N17
+    end
+    N1 --> N14
+    subgraph N18["RRF 融合"]
+        N19["只看排名不看分数"]
+        N18 --> N19
+        N20["k = 60"]
+        N18 --> N20
+        N21["跨路天然可比"]
+        N18 --> N21
+        N22["votes 共识标记"]
+        N18 --> N22
+    end
+    N1 --> N18
+    subgraph N23["重排 rerank"]
+        N24["cross-encoder"]
+        N23 --> N24
+        N25["本地 fastembed"]
+        N23 --> N25
+        N26["Cohere API 可选"]
+        N23 --> N26
+        N27["分数与召回分不可比"]
+        N23 --> N27
+        N28["候选数决定天花板"]
+        N23 --> N28
+        N29["失败可降级"]
+        N23 --> N29
+    end
+    N1 --> N23
+    subgraph N30["索引一致性"]
+        N31["FAISS 落盘"]
+        N30 --> N31
+        subgraph N32["BM25 不落盘"]
+            N33["每次启动重建"]
+            N32 --> N33
+            N34["避免两份不一致"]
+            N32 --> N34
+        end
+        N30 --> N32
+        N35["BM25 用正文"]
+        N30 --> N35
+        N36["向量用标题+正文"]
+        N30 --> N36
+    end
+    N1 --> N30
+    subgraph N37["降级链"]
+        N38["向量失败 → 只用 BM25"]
+        N37 --> N38
+        N39["BM25 失败 → 只用向量"]
+        N37 --> N39
+        N40["重排失败 → 退回融合顺序"]
+        N37 --> N40
+        N41["生成失败 → 仍返回检索结果"]
+        N37 --> N41
+    end
+    N1 --> N37
+    subgraph N42["核心认知"]
+        N43["召回阶段的排序不够准"]
+        N42 --> N43
+        N44["重排才是精度来源"]
+        N42 --> N44
+        N45["收益靠对照组量化"]
+        N42 --> N45
+    end
+    N1 --> N42
+```
+
+---
+
+## 思维导图：混合检索与重排体系
 
 ```mermaid
 mindmap
-  root((08-rag<br/>混合检索 + 重排))
-    分词 tokenize
+  root((08-rag))
+    分词 tokenize.rs
       拉丁串 小写整词
-      CJK unigram + bigram
-      bigram 保留词序
-      标点当分隔符
-    BM25 稀疏检索
-      打分公式
-        IDF 词稀有度
-        词频饱和 k1 = 1.2
-        长度归一化 b = 0.75
+      CJK unigram
+      CJK bigram
+      标点纯分隔符
+      纯数字词元过滤
+    稀疏路 bm25.rs
       倒排索引
-      失败模式 对罕见 token 弱
-    向量稠密检索
-      复用 05-rag
+        postings 词到文档
+        doc_len 文档长度
+        avgdl 平均长度
+      IDF 公式
+        常见词权重低
+        永不为负
+      BM25 打分
+        IDF
+        词频饱和 K1
+        长度归一化 B
+      查询词去重
+    稠密路
+      复用 rag_05
+      fastembed
       L2 归一化
-      失败模式 对精确词弱
-    RRF 融合
-      只看排名不看分数
-      k = 60
-      跨路天然可比
-      votes 共识标记
-    重排 rerank
-      cross-encoder
-      本地 fastembed
-      Cohere API 可选
-      分数与召回分不可比
-      候选数决定天花板
-      失败可降级
-    索引一致性
-      FAISS 落盘
-      BM25 不落盘
-        每次启动重建
-        避免两份不一致
-      BM25 用正文
-      向量用标题+正文
+      FAISS Flat
+    融合 hybrid.rs
+      SearchMode
+        Vector
+        Bm25
+        Hybrid
+      RRF 融合
+        score 等于 1除以60加rank
+      votes 共识度
+    重排 reranker.rs
+      LocalCrossEncoder
+        fastembed TextRerank
+        本地 ONNX
+        CPU 密集
+      CohereReranker
+        HTTP API 可选
+      精排分与召回分不可比
+    索引 index.rs
+      两套索引
+        FAISS 向量
+        BM25 倒排
+      保持一致的构建流程
     降级链
-      向量失败 → 只用 BM25
-      BM25 失败 → 只用向量
-      重排失败 → 退回融合顺序
-      生成失败 → 仍返回检索结果
+      向量路失败 用BM25
+      重排失败 退回融合顺序
     核心认知
-      召回阶段的排序不够准
-      重排才是精度来源
-      收益靠对照组量化
+      向量和关键词失败模式互补
+      召回是粗筛 重排是精度来源
+      精排分不能当召回分用
+      降级链必须每层都有
 ```
+
+---
+
+## 混合检索 + 重排链路
+
+```mermaid
+flowchart TB
+    Q["用户问题"] --> TK["tokenize<br/>拉丁整词 + CJK unigram/bigram"]
+    TK --> V["稠密路<br/>Embedder → FAISS<br/>召回 per_path_k 条"]
+    TK --> S["稀疏路<br/>BM25 倒排索引<br/>召回 per_path_k 条"]
+
+    V --> FUSE{"RRF 融合<br/>score = Σ 1/(60+rank)"}
+    S --> FUSE
+    FUSE --> CAND["候选集<br/>带 votes 共识度"]
+
+    CAND --> RR{"cross-encoder 重排<br/>query × 候选 逐条打分"}
+    RR -->|成功| TOP["精排 top-n<br/>按精排分排序"]
+    RR -->|失败| DEG1["降级：退回融合顺序"]
+
+    TOP --> CTX["组装上下文"]
+    DEG1 --> CTX
+    CTX --> LLM["LLM 生成带引用的答案"]
+
+    V -.失败.-> DEG2["降级：只用 BM25 路"]
+    DEG2 --> S
+
+    style FUSE fill:#f3e5f5
+    style RR fill:#e8f5e9
+    style DEG1 fill:#fff3e0
+    style DEG2 fill:#ffebee
+```
+
+⚠️ **重排是 CPU 密集的** —— cross-encoder 要把「查询 + 候选」拼起来逐条推理。
+并发太高会互相抢 CPU，整体反而更慢（09-rag-eval 也踩了同样的坑）。
 
 ---
 
@@ -468,6 +621,30 @@ pub fn is_degradable(&self) -> bool {
 }
 ```
 
+### 4.6 重排的延迟代价（实测）
+
+重排是本项目**唯一**的重活 —— 检索是毫秒级，重排是**秒级**。
+
+实测（Apple Silicon，11 个候选块，`bge-reranker-base`）：
+
+| 构建模式 | 重排耗时 |
+|---|---|
+| `cargo run`（debug） | ~6000 ms |
+| `cargo run --release` | ~850 ms |
+
+**所以生产部署必须用 release 构建。** debug 模式下 ONNX 推理没有优化，慢 7 倍。
+
+这也是**两阶段检索**存在的根本原因：把 20 个候选逐条送进 cross-encoder 是必要的代价，
+但如果对**整个知识库**这么做就完全不可接受了。所以先用便宜的召回缩小范围，再花贵的重排。
+
+### 4.7 ⚠️ 候选池大小决定重排的天花板
+
+`HYBRID_RERANK_CANDIDATE_K = 20` 意味着**每路召回也至少要 20 条**，
+否则两路合并去重后凑不满 20 个候选，「送 20 条进重排」就是个空承诺。
+
+这条约束在代码里是显式的（见 [`src/pipeline.rs`](src/pipeline.rs) 的 `retrieve_with`），
+并且有对应的回归测试（`rerank_receives_enough_candidates`）。
+
 ---
 
 ## 五、索引：两套索引怎么保持一致
@@ -584,6 +761,30 @@ HYBRID_RERANK_ENABLED=false cargo run -p rag-08
 
 ---
 
+## 日志
+
+全仓库统一走 `00-logging`（`agent-logging`）。
+
+```bash
+RUST_LOG=info cargo run -p rag-08 -- compare
+RUST_LOG=debug,rag_08=trace cargo run -p rag-08 -- search "问题"
+```
+
+| 事件 | 级别 | 关键字段 |
+|---|---|---|
+| 建索引（加载 → 分块 → 向量化 → 写入） | `INFO` | `chunk_count` / `elapsed_ms` |
+| BM25 索引构建 | `DEBUG` | `doc_count` |
+| 稠密路召回 | `DEBUG` | `top_k` / `hit_count` |
+| 关键词路召回 | `DEBUG` | `top_k` / `hit_count` |
+| RRF 融合 | `DEBUG` | `input_count` / `output_count` / `rrf_k` |
+| 重排（cross-encoder / Cohere） | `DEBUG` | `candidate_count` / `top_n` / `backend` |
+| 重排失败 → 降级为融合顺序 | `WARN` | `error` |
+| 检索完成 | `INFO` | `mode` / `hit_count` / `elapsed_ms` |
+
+HTTP 层用 `agent_logging::trace_layer()`。
+
+---
+
 ## 八、降级链
 
 每一环都有降级路径：
@@ -638,6 +839,161 @@ cargo test -p rag-08
 - [BM25 — Robertson & Zaragoza, 2004](https://www.microsoft.com/en-us/research/publication/the-lm-and-lmr-at-the-30th-anniversary-of-the-vector-space-model/)
 - [RRF — Cormack et al., 2009](https://plg.uwaterloo.ca/~gvcormac/cormacksigir09-rrf.pdf)
 - [BGE Reranker](https://github.com/FlagOpen/FlagEmbedding)
+
+---
+
+## 技术参考速查
+
+### BM25 公式拆解
+
+```text
+score(d, q) = Σ  IDF(t) × ( tf × (K1 + 1) ) / ( tf + K1 × length_norm )
+                                      └──── 词频饱和 ────┘
+                                                    └──── 长度归一化 ────┘
+
+IDF(t)      = ln( (N - df + 0.5) / (df + 0.5) + 1 )
+length_norm = 1 - B + B × (doc_len / avgdl)
+```
+
+| 参数 | 含义 | 默认 | 调大的影响 |
+|---|---|---|---|
+| `K1` | 词频饱和速度 | 1.2~2.0 | 重复词的边际收益更高 |
+| `B` | 长度归一化强度 | 0.75 | 长文档被惩罚更狠 |
+| `avgdl` | 语料平均文档长度 | 自动算 | — |
+
+### 三部分各自解决什么
+
+| 部分 | 解决 | 单独去掉会怎样 |
+|---|---|---|
+| **IDF** | 常见词没区分度 | 「的」「系统」这类词主导排序 |
+| **词频饱和** | 重复出现不等于更重要 | 刷词的文档霸榜 |
+| **长度归一化** | 长文档天然命中更多词 | 长文档总是排前面 |
+
+⚠️ **IDF 用 `+1` 保证永不为负** —— 否则出现在超过一半文档里的词会得到负分，
+反而排到最后。测试 `idf_is_always_positive` 专门守这条。
+
+### BM25 vs 向量检索的失败模式对照
+
+| 查询类型 | 向量检索 | BM25 | 谁赢 |
+|---|---|---|---|
+| 精确关键词（`IndexFlatIP`） | ❌ 召不回 | ✅ 精准 | **BM25** |
+| 同义改写（「怎么优化检索速度」vs「检索性能调优」） | ✅ 命中 | ❌ 对不上 | **向量** |
+| 罕见专有名词 | ⚠️ 模糊 | ✅ 精确 | **BM25** |
+| 概念性问答 | ✅ | ❌ | **向量** |
+
+> **这正是混合检索的价值 —— 两者的失败模式正好互补。**
+
+### CJK 分词：unigram + bigram
+
+```text
+「检索增强」→ unigram: 检 索 增 强
+             → bigram:  检索 索增 增强
+```
+
+| | unigram | bigram |
+|---|---|---|
+| 保留词序 | ❌ | ✅ |
+| 索引大小 | 小 | 2 倍 |
+| 「索增强」能匹配「检索增强」吗 | ✅ 能（都是单字） | ❌ 不能 |
+
+⚠️ **只做 unigram 会产生大量假匹配**（「索增强」匹配到「检索增强」）；
+**只做 bigram 会漏掉单字查询**。所以两者都要出。
+
+本项目的规则：
+
+| 字符类型 | 处理 |
+|---|---|
+| 拉丁字母 / 数字 | 连续串 → 小写整词（`IndexFlatIP` → `indexflatip`） |
+| CJK 汉字 | unigram + bigram |
+| 标点 / 空白 / Markdown 符号 | **纯分隔符**，直接丢弃 |
+
+⚠️ **纯数字词元要过滤** —— `1`、`2024` 在 BM25 里几乎没有区分度，
+留着只会稀释真正有意义的词。
+
+### 查询词去重
+
+```text
+查询里同一个词出现两次 → 只算一次
+```
+
+原因：**IDF 已经编码了「这个词有多稀有」**。
+重复查询词是想强调，但在 BM25 的词集合语义里，
+重复只会线性放大同一个词的贡献，偏离了「词集合」的含义。
+
+业界实现（Lucene / Elasticsearch）也是去重的。
+
+### 融合与重排的分界
+
+| | 召回（两路检索 + RRF） | 重排（cross-encoder） |
+|---|---|---|
+| 模型 | bi-encoder（编码一次） | cross-encoder（编码 N 次） |
+| 能否看到 query 和 doc 一起 | ❌ 分开编码 | ✅ 一起编码 |
+| 精度 | 粗筛 | **精排** |
+| 成本 | 低，可大规模 | 高，只能对少量候选 |
+| 候选规模 | 几十~几百 | 几十 |
+
+> **召回是粗筛，重排才是精度的真正来源。**
+
+⚠️ **精排分和召回分不可比** —— cross-encoder 输出的是 logits，
+范围可能是 `-11 ~ +11`；召回分是余弦相似度（`0.6 ~ 0.8`）。
+**把精排分当阈值用会完全失效。**
+
+### `SearchMode` 三档
+
+| 模式 | 走哪几路 | 用途 |
+|---|---|---|
+| `Vector` | 只有稠密 | 06-rag 的水平（对照组） |
+| `Bm25` | 只有稀疏 | 关键词路的天花板（对照组） |
+| `Hybrid` | 两路 + RRF + 重排 | 优化组 |
+
+`/api/compare` 能同时跑三档做差值 —— 这就是 09-rag-eval 的基础。
+
+### 降级链的每一层
+
+| 环节失败 | 降级行为 | 代价 |
+|---|---|---|
+| 向量路失败 | 只用 BM25 路 | 召回变窄，但能出结果 |
+| BM25 路失败 | 只用向量路 | 同上 |
+| 重排失败 | 退回融合顺序 | 精度降低，但排序仍合理 |
+| 两路都失败 | 走「无上下文」提示词 | 拒答 |
+
+⚠️ **降级链必须每层都有** —— 否则向量库抖一下，整个服务就 500 了。
+
+### 重排的 CPU 成本
+
+cross-encoder 对**每个候选**都要做一次完整推理。
+`rerank_candidate_k = 20` 就是 20 次推理。
+
+所以：
+
+- ⚠️ 重排是 **CPU 密集**的，**并发不能开太高**（09-rag-eval 也踩了这个坑）
+- ⚠️ `rerank_candidate_k` 越大越准，但越慢 —— 要权衡
+
+### 配置速查
+
+| 环境变量 | 说明 | 默认 |
+|---|---|---|
+| `HYBRID_DATA_DIR` | 知识库目录 | `08-rag/data` |
+| `HYBRID_INDEX_PATH` | 索引路径 | `08-rag/index/index.faiss` |
+| `HYBRID_BIND_ADDR` | 监听地址 | `127.0.0.1:3020` |
+| `HYBRID_EMBEDDING_MODEL` | 嵌入模型 | `e5` |
+| `HYBRID_MODE` | 检索模式 | `hybrid` |
+| `HYBRID_TOP_K` | 最终返回条数 | `5` |
+| `HYBRID_PER_PATH_K` | 每路召回数 | `20` |
+| `HYBRID_RERANK_ENABLED` | 是否启用重排 | `true` |
+| `HYBRID_RERANK_BACKEND` | `local` / `cohere` | `local` |
+| `HYBRID_RERANK_MODEL` | 本地重排模型 | `BAAI/bge-reranker-base` |
+| `HYBRID_RERANK_CANDIDATE_K` | 重排候选数 | `20` |
+| `HYBRID_RERANK_TOP_N` | 重排后保留数 | `5` |
+| `HYBRID_COHERE_MODEL` | Cohere 重排模型 | `rerank-multilingual-v3.0` |
+| `HYBRID_MODEL` | 生成模型 | `deepseek-flash` |
+| `HYBRID_TEMPERATURE` | 生成温度 | `0.1` |
+| `HYBRID_MAX_TOKENS` | 生成上限 | `2000` |
+| `HYBRID_AUTO_INDEX` | 启动时自动建索引 | `true` |
+
+⚠️ **`HYBRID_PER_PATH_K` 和 `HYBRID_TOP_K` 是两个不同的量** ——
+前者是「每路召回多少」（召回池），后者是「最终给 LLM 多少」（上下文大小）。
+重排在两者之间：`RERANK_CANDIDATE_K` 个候选里精排出 `RERANK_TOP_N` 个。
 
 ---
 

@@ -29,6 +29,7 @@
 //!
 //! 所以标准做法是：**向量召回 20~100 条 → 重排取 top 3~5**。
 
+use agent_logging::{debug, info, warn};
 use rag_05::embed::Embedder;
 use rag_05::store::{FaissStore, SearchHit, VectorStore};
 use serde::{Deserialize, Serialize};
@@ -207,11 +208,18 @@ impl Retriever {
     /// 检索：问题 → top-k 命中块（显式指定 k）。
     ///
     /// Agent 场景下用这个 —— 模型可以在工具调用里自己指定要几条。
-    pub async fn retrieve_with_top_k(&self, query: &str, top_k: usize) -> RagResult<RetrievalResult> {
+    pub async fn retrieve_with_top_k(
+        &self,
+        query: &str,
+        top_k: usize,
+    ) -> RagResult<RetrievalResult> {
         let query = query.trim();
         if query.is_empty() {
+            warn!("检索问题为空");
             return Err(RagError::BadRequest("问题不能为空".to_string()));
         }
+
+        debug!(query = %query, top_k, "开始检索");
 
         // 1. 问题 → 向量。用 `embed_query` 而不是 `embed_documents` ——
         //    E5 这类非对称模型要求查询加 `query: ` 前缀，文档加 `passage: `。
@@ -225,10 +233,7 @@ impl Retriever {
         //
         //    ⚠️ 这里 `k` 用 `top_k` 而不是更大的值，因为朴素版没有重排 ——
         //    召回顺序就是最终顺序。多召回只会引入更多噪声。
-        let mut guard = self
-            .store
-            .lock()
-            .await;
+        let mut guard = self.store.lock().await;
 
         let hits = guard
             .search(&query_vector, top_k.max(1))
@@ -239,10 +244,7 @@ impl Retriever {
 
         // 3. 阈值过滤（默认关闭 —— 这是 Naive 的边界之一）。
         let filtered: Vec<SearchHit> = match self.config.min_score {
-            Some(min) => hits
-                .into_iter()
-                .filter(|h| h.score >= min)
-                .collect(),
+            Some(min) => hits.into_iter().filter(|h| h.score >= min).collect(),
             None => hits,
         };
 
@@ -254,6 +256,26 @@ impl Retriever {
             .collect();
 
         let top_score = chunks.first().map(|c| c.score);
+
+        info!(
+            query = %query,
+            requested = top_k,
+            retrieved = retrieved_count,
+            top_score,
+            min_score = ?self.config.min_score,
+            "检索完成"
+        );
+
+        // 逐条记录命中明细 —— 排查「为什么召回了这个」时最有用。
+        for chunk in &chunks {
+            debug!(
+                rank = chunk.rank + 1,
+                id = %chunk.id,
+                score = chunk.score,
+                heading = %chunk.heading_path.join(" > "),
+                "命中块"
+            );
+        }
 
         Ok(RetrievalResult {
             query: query.to_string(),

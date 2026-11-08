@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+agent-logging = { path = "../00-logging" }
 anyhow = { workspace = true }
 rig = { workspace = true }
 serde = { workspace = true }

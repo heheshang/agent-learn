@@ -20,8 +20,9 @@
 
 use std::sync::Arc;
 
+use agent_logging::{info, init, stage_guard};
 use anyhow::Result;
-use rag_07::api::{build_pipeline, routes, AppState, AppStateInner};
+use rag_07::api::{AppState, AppStateInner, build_pipeline, routes};
 use rag_07::config::AppConfig;
 use rag_07::llm::{GenaiLlm, LlmOptions};
 use rag_07::pipeline::QueryPipeline;
@@ -30,7 +31,11 @@ use rag_07::transform::Strategy;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let mode = std::env::args().nth(1).unwrap_or_else(|| "serve".to_string());
+    init("rag-07");
+
+    let mode = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "serve".to_string());
 
     match mode.as_str() {
         "demo" => run_demo().await?,
@@ -46,15 +51,30 @@ async fn main() -> Result<()> {
 async fn run_server() -> Result<()> {
     let config = AppConfig::from_env();
 
-    println!("=== 07-query Query Transformation 服务 ===\n{}", config.summary());
+    println!(
+        "=== 07-query Query Transformation 服务 ===\n{}",
+        config.summary()
+    );
+    info!(
+        bind_addr = %config.bind_addr,
+        default_strategy = config.transform.default_strategy.name(),
+        transform_model = %config.transform.transform_model,
+        generation_model = %config.generation.model,
+        top_k = config.retrieval.top_k,
+        fusion = config.retrieval.fusion.name(),
+        "服务配置已加载"
+    );
 
     // 建索引或加载已有索引。
     println!("\n准备索引...");
+    let _stage = stage_guard("准备索引");
     let (store, stats, created) = rag_07::index::ensure_index(&config).await?;
     if created {
         println!("  ✓ 已新建索引: {}", stats.summary());
+        info!(stats = %stats.summary(), "索引已新建");
     } else {
         println!("  ✓ 已加载索引: {}", stats.summary());
+        info!(stats = %stats.summary(), "索引已加载");
     }
 
     // 装配核心组件。
@@ -70,16 +90,14 @@ async fn run_server() -> Result<()> {
         LlmOptions {
             temperature: config.transform.transform_temperature,
             max_tokens: config.transform.transform_max_tokens,
+            // 改写是短结构化输出，思考只会烧 token。
+            disable_reasoning: true,
         },
     )) as Arc<dyn rag_07::llm::Llm>;
 
     let pipeline = build_pipeline(retriever, llm, &config);
 
-    let state: AppState = Arc::new(AppStateInner::new(
-        config.clone(),
-        pipeline,
-        stats,
-    ));
+    let state: AppState = Arc::new(AppStateInner::new(config.clone(), pipeline, stats));
 
     let app = routes::router(state);
     let listener = tokio::net::TcpListener::bind(&config.bind_addr)
@@ -88,6 +106,7 @@ async fn run_server() -> Result<()> {
 
     let addr = listener.local_addr()?;
     println!("\n服务已启动: http://{addr}\n");
+    info!(addr = %addr, "HTTP 服务已启动");
     println!("端点:");
     println!("  GET  /               服务信息 + 索引状态");
     println!("  GET  /health         健康检查");
@@ -128,6 +147,8 @@ async fn run_demo() -> Result<()> {
         LlmOptions {
             temperature: config.transform.transform_temperature,
             max_tokens: config.transform.transform_max_tokens,
+            // 改写是短结构化输出，思考只会烧 token。
+            disable_reasoning: true,
         },
     )) as Arc<dyn rag_07::llm::Llm>;
 
@@ -147,7 +168,9 @@ async fn run_demo() -> Result<()> {
         println!("\n{}", "─".repeat(70));
         println!("问: {question}");
 
-        let outcome = pipeline.ask(question, config.transform.default_strategy).await?;
+        let outcome = pipeline
+            .ask(question, config.transform.default_strategy)
+            .await?;
 
         println!("\n改写结果（{}）:", outcome.retrieval.strategy.name());
         for q in &outcome.retrieval.transformed_queries {
@@ -164,11 +187,32 @@ async fn run_demo() -> Result<()> {
                 outcome.retrieval.transformed_queries.len(),
                 hit.heading_path.join(" > ")
             );
-            println!("      {}", hit.text.chars().take(60).collect::<String>().replace('\n', " "));
+            println!(
+                "      {}",
+                hit.text
+                    .chars()
+                    .take(60)
+                    .collect::<String>()
+                    .replace('\n', " ")
+            );
         }
 
         println!("\n答: {}", outcome.answer);
-        println!("\n引用: {} 条 | 改写 {}ms | 检索 {}ms", outcome.citations.len(), outcome.retrieval.transform_ms, outcome.retrieval.retrieve_ms);
+        info!(
+            question = %question,
+            strategy = outcome.retrieval.strategy.name(),
+            hits = outcome.retrieval.hits.len(),
+            citations = outcome.citations.len(),
+            transform_ms = outcome.retrieval.transform_ms,
+            retrieve_ms = outcome.retrieval.retrieve_ms,
+            "Demo 问答完成"
+        );
+        println!(
+            "\n引用: {} 条 | 改写 {}ms | 检索 {}ms",
+            outcome.citations.len(),
+            outcome.retrieval.transform_ms,
+            outcome.retrieval.retrieve_ms
+        );
     }
 
     Ok(())
@@ -195,6 +239,8 @@ async fn run_compare() -> Result<()> {
         LlmOptions {
             temperature: config.transform.transform_temperature,
             max_tokens: config.transform.transform_max_tokens,
+            // 改写是短结构化输出，思考只会烧 token。
+            disable_reasoning: true,
         },
     )) as Arc<dyn rag_07::llm::Llm>;
 
@@ -229,6 +275,16 @@ async fn run_compare() -> Result<()> {
                 .join(" ");
 
             let hit = all_text.contains(expected);
+
+            info!(
+                question = %question,
+                strategy = strategy.name(),
+                transformed = retrieval.transformed_queries.len(),
+                hits = retrieval.hits.len(),
+                matched_expected = hit,
+                retrieve_ms = retrieval.retrieve_ms,
+                "策略对比"
+            );
 
             println!(
                 "  {:<12} {} 条改写 | 命中 {} 个块 | {}  ({}ms)",

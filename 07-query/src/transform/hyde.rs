@@ -32,9 +32,10 @@
 //! 这个细节由 [`crate::retrieval::EmbedMode`] 统一处理。
 
 use crate::llm::Llm;
+use agent_logging::{debug, warn};
 
 use super::prompts::HYDE_PROMPT;
-use super::{parse_single, QueryTransformer, Strategy, TransformedQuery, TransformFuture};
+use super::{QueryTransformer, Strategy, TransformFuture, TransformedQuery, parse_single};
 
 /// HyDE 转换器。
 pub struct HydeTransformer {
@@ -90,10 +91,17 @@ impl QueryTransformer for HydeTransformer {
 
             // 解析：取第一段「像文档」的内容。
             let Some(text) = parse_single(&raw) else {
+                warn!("HyDE 输出解析不出内容");
                 return Err(crate::error::QueryError::Transformation(
                     "HyDE 输出解析不出内容".to_string(),
                 ));
             };
+
+            debug!(
+                question = %question,
+                doc_chars = text.chars().count(),
+                "HyDE 生成假想文档"
+            );
 
             Ok(vec![TransformedQuery {
                 text,
@@ -159,11 +167,7 @@ mod tests {
         }
 
         impl Llm for RecordingLlm {
-            fn chat<'a>(
-                &'a self,
-                system: &'a str,
-                user: &'a str,
-            ) -> crate::llm::LlmFuture<'a> {
+            fn chat<'a>(&'a self, system: &'a str, user: &'a str) -> crate::llm::LlmFuture<'a> {
                 self.sink
                     .lock()
                     .unwrap()

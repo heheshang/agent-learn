@@ -15,6 +15,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
+use agent_logging::{debug, info, warn};
 use axum::Json;
 use axum::extract::State;
 
@@ -109,6 +110,14 @@ pub async fn search(
     let mut hits = outcome.hits.clone();
     hits.truncate(top_k);
 
+    debug!(
+        mode = mode.name(),
+        path = outcome.path.name(),
+        hit_count = hits.len(),
+        elapsed_ms = outcome.elapsed_ms,
+        "检索完成"
+    );
+
     Ok(Json(SearchResponse {
         question,
         mode,
@@ -127,6 +136,15 @@ pub async fn ask(
     let mode = resolve_mode(&state, payload.mode.as_deref())?;
 
     let outcome = state.pipeline.ask_with(&question, mode).await?;
+
+    info!(
+        mode = mode.name(),
+        answer_len = outcome.answer.chars().count(),
+        citations = outcome.citations.len(),
+        passages = outcome.compression.stats.passages.len(),
+        elapsed_ms = outcome.elapsed_ms,
+        "问答完成"
+    );
 
     Ok(Json(AskResponse {
         answer: outcome.answer,
@@ -155,8 +173,9 @@ pub async fn compare(
     let mut variants = Vec::with_capacity(modes.len());
     let mut id_sets: Vec<Vec<String>> = Vec::with_capacity(modes.len());
 
-    for mode in modes {
-        match state.pipeline.retrieve_with(&question, mode).await {
+    let mode_count = modes.len();
+    for mode in &modes {
+        match state.pipeline.retrieve_with(&question, *mode).await {
             Ok(outcome) => {
                 let ids: Vec<String> = outcome.hits.iter().map(|h| h.id.clone()).collect();
                 id_sets.push(ids.clone());
@@ -171,6 +190,7 @@ pub async fn compare(
             }
             Err(e) => {
                 id_sets.push(Vec::new());
+                warn!(mode = mode.name(), error = %e, "消融档位检索失败");
                 variants.push(CompareVariant {
                     mode: mode.name().to_string(),
                     ok: false,
@@ -182,10 +202,14 @@ pub async fn compare(
         }
     }
 
+    let overlap = compute_overlap(&id_sets);
+
+    info!(variant_count = mode_count, overlap, "消融对照完成");
+
     Ok(Json(CompareResponse {
         question,
         variants,
-        overlap: compute_overlap(&id_sets),
+        overlap,
         elapsed_ms: start.elapsed().as_millis() as u64,
     }))
 }
@@ -221,12 +245,24 @@ pub async fn eval(
         .run_ladder_limited(&dataset, &modes, payload.limit)
         .await?;
 
+    info!(variant_count = modes.len(), "消融评估完成");
+
     Ok(Json(result))
 }
 
 /// `POST /api/reindex` —— 重建索引。
 pub async fn reindex(State(state): State<AppState>) -> Result<Json<ReindexResponse>, RagError> {
+    info!(collection = %state.config.milvus.collection, "开始重建索引");
     let report = crate::bootstrap::ensure_index(&state.config).await?;
+
+    info!(
+        chunks = report.chunks,
+        server_count = report.server_count,
+        bm25_docs = report.bm25_docs,
+        created = report.created,
+        elapsed_ms = report.elapsed_ms,
+        "索引重建完成"
+    );
 
     Ok(Json(ReindexResponse {
         collection: report.collection.clone(),
@@ -242,6 +278,7 @@ pub async fn reindex(State(state): State<AppState>) -> Result<Json<ReindexRespon
 fn require_question(question: &str) -> RagResult<String> {
     let trimmed = question.trim();
     if trimmed.is_empty() {
+        warn!("请求里的问题为空");
         return Err(RagError::BadRequest("问题不能为空".to_string()));
     }
     Ok(trimmed.to_string())

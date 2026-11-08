@@ -50,13 +50,10 @@ async fn make_retriever(data_dir: &std::path::Path, per_path_k: usize) -> Hybrid
     let embedder = rag_08::index::make_embedder(rag_05::embed::Model::MultilingualE5Small)
         .expect("创建嵌入器失败（模型未下载？）");
 
-    let (store, _stats) = rag_08::index::build_store(
-        &embedder,
-        data_dir,
-        &rag_08::index::IndexOptions::default(),
-    )
-    .await
-    .expect("建索引失败");
+    let (store, _stats) =
+        rag_08::index::build_store(&embedder, data_dir, &rag_08::index::IndexOptions::default())
+            .await
+            .expect("建索引失败");
 
     let bm25 = rag_08::index::build_bm25(data_dir, &rag_04::splitter::SplitterConfig::default())
         .expect("建 BM25 索引失败");
@@ -87,7 +84,10 @@ async fn vector_and_bm25_indexes_have_matching_sizes() {
     let vector_size = retriever.index_size().await;
     let bm25_size = retriever.bm25_size();
 
-    assert!(vector_size >= 8, "向量索引里应该有至少 8 个块，实际 {vector_size}");
+    assert!(
+        vector_size >= 8,
+        "向量索引里应该有至少 8 个块，实际 {vector_size}"
+    );
     assert_eq!(
         vector_size, bm25_size,
         "两套索引的块数必须一致 —— 否则融合时对不上"
@@ -375,10 +375,7 @@ async fn out_of_range_citations_are_dropped() {
         .await
         .unwrap();
 
-    assert!(
-        outcome.citations.is_empty(),
-        "越界的引用编号必须被丢掉"
-    );
+    assert!(outcome.citations.is_empty(), "越界的引用编号必须被丢掉");
 }
 
 #[tokio::test]
@@ -449,8 +446,8 @@ fn bm25_index_is_built_from_the_knowledge_base() {
     let index = Bm25Index::new();
     assert!(index.is_empty());
 
-    let built = rag_08::index::build_bm25(&data_dir, &rag_04::splitter::SplitterConfig::default())
-        .unwrap();
+    let built =
+        rag_08::index::build_bm25(&data_dir, &rag_04::splitter::SplitterConfig::default()).unwrap();
     assert!(!built.is_empty());
     assert!(built.vocab_size() > 50, "词表应该有一定规模");
 }

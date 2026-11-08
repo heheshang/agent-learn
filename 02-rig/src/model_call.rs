@@ -10,6 +10,7 @@
 //! 与 Agent 的区别：这里没有循环。模型让你调工具，你得自己执行、再把结果
 //! 作为 `Message::tool_result` 追加回历史，然后自己再发一次请求。
 
+use agent_logging::{debug, info};
 use rig::completion::{CompletionRequest, CompletionResponse, ToolDefinition};
 use rig::prelude::Message;
 use rig::providers::deepseek;
@@ -21,6 +22,7 @@ use rig::providers::openai::{OpenAI, wire::OpenAiWire};
 /// 模型的 base url 由 provider 内置。
 pub fn model() -> anyhow::Result<rig::driver::Model<OpenAiWire>> {
     let client: OpenAI = deepseek::from_env()?;
+    debug!("DeepSeek 客户端已构造");
     Ok(client.completion(deepseek::DEEPSEEK_V4_FLASH))
 }
 
@@ -33,7 +35,9 @@ pub async fn single_turn() -> anyhow::Result<()> {
         .temperature(0.3)
         .max_tokens(512);
 
+    info!("发起单轮模型调用（model=deepseek-v4-flash）");
     let response: CompletionResponse = model.call(request).await?;
+    info!(usage = ?response.usage, "单轮调用完成");
 
     println!("=== 1. 单轮调用 ===");
     println!("回复: {}", response.text());
@@ -54,6 +58,8 @@ pub async fn multi_turn() -> anyhow::Result<()> {
         Message::assistant("素数是大于 1 且只有 1 和自身两个正因数的自然数。"),
         Message::user("那 97 呢？"),
     ];
+
+    debug!(message_count = history.len(), "发起多轮模型调用");
 
     let request = CompletionRequest::from(history);
     let response = model.call(request).await?;
@@ -84,14 +90,21 @@ pub async fn raw_tool_call() -> anyhow::Result<()> {
     );
 
     let request = CompletionRequest::new("北京今天天气怎么样？").tool(tool);
+    info!("发起带工具声明的模型调用（工具不会被执行，只观察模型的请求）");
     let response = model.call(request).await?;
 
     println!("\n=== 3. 原始工具调用 ===");
     let calls: Vec<_> = response.tool_calls().collect();
     if calls.is_empty() {
+        debug!("模型没有请求调用工具，直接给出了答案");
         println!("模型没有请求调用工具，直接回答: {}", response.text());
     } else {
         for call in calls {
+            info!(
+                tool = %call.function.name,
+                args = ?call.function.arguments,
+                "模型请求调用工具"
+            );
             println!(
                 "模型请求调用工具: {} 参数 {:?}",
                 call.function.name, call.function.arguments

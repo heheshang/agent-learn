@@ -20,8 +20,9 @@
 
 use std::sync::Arc;
 
+use agent_logging::{info, init, stage_guard};
 use anyhow::Result;
-use rag_08::api::{build_pipeline, routes, AppState, AppStateInner};
+use rag_08::api::{AppState, AppStateInner, build_pipeline, routes};
 use rag_08::config::AppConfig;
 use rag_08::hybrid::SearchMode;
 use rag_08::index::IndexStats;
@@ -32,7 +33,11 @@ use rag_08::tokenize::tokenize;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let mode = std::env::args().nth(1).unwrap_or_else(|| "serve".to_string());
+    init("rag-08");
+
+    let mode = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "serve".to_string());
 
     match mode.as_str() {
         "demo" => run_demo().await?,
@@ -99,15 +104,14 @@ async fn bootstrap(config: &AppConfig) -> Result<Runtime> {
         rag_08::llm::LlmOptions {
             temperature: config.generation.temperature,
             max_tokens: config.generation.max_tokens,
+            // 生成侧保留思考 —— 问答质量需要推理。
+            disable_reasoning: false,
         },
     )) as Arc<dyn rag_08::llm::Llm>;
 
     let pipeline = build_pipeline(retriever, reranker, llm, config);
 
-    Ok(Runtime {
-        pipeline,
-        stats,
-    })
+    Ok(Runtime { pipeline, stats })
 }
 
 /// 启动 HTTP 服务。
@@ -115,13 +119,26 @@ async fn run_server() -> Result<()> {
     let config = AppConfig::from_env();
 
     println!("=== 08-rag 混合检索 + 重排服务 ===\n{}", config.summary());
+    info!(
+        bind_addr = %config.bind_addr,
+        mode = config.retrieval.mode.name(),
+        top_k = config.retrieval.top_k,
+        rerank_enabled = config.rerank.enabled,
+        rerank_backend = config.rerank.backend.name(),
+        rerank_model = %config.rerank.model.display_name(),
+        generation_model = %config.generation.model,
+        "服务配置已加载"
+    );
 
     println!("\n准备索引...");
+    let _stage = stage_guard("准备索引");
     let (store, bm25, stats, created) = rag_08::index::ensure_index(&config).await?;
     if created {
         println!("  ✓ 已新建索引: {}", stats.summary());
+        info!(stats = %stats.summary(), "索引已新建");
     } else {
         println!("  ✓ 已加载索引: {}", stats.summary());
+        info!(stats = %stats.summary(), "索引已加载");
     }
     println!(
         "  ✓ BM25 倒排索引: {} 个块 | 词表 {} 项",
@@ -149,9 +166,11 @@ async fn run_server() -> Result<()> {
             &config.rerank.cohere_model,
         )?;
         println!("  ✓ 重排器: {}", r.name());
+        info!(reranker = %r.name(), "重排器就绪");
         Some(r)
     } else {
         println!("  ⚠ 重排已关闭（对照组）");
+        info!("重排已关闭（对照组）");
         None
     };
 
@@ -160,6 +179,8 @@ async fn run_server() -> Result<()> {
         rag_08::llm::LlmOptions {
             temperature: config.generation.temperature,
             max_tokens: config.generation.max_tokens,
+            // 生成侧保留思考 —— 问答质量需要推理。
+            disable_reasoning: false,
         },
     )) as Arc<dyn rag_08::llm::Llm>;
 
@@ -179,6 +200,7 @@ async fn run_server() -> Result<()> {
 
     let addr = listener.local_addr()?;
     println!("\n服务已启动: http://{addr}\n");
+    info!(addr = %addr, "HTTP 服务已启动");
     println!("端点:");
     println!("  GET  /               服务信息 + 索引状态");
     println!("  GET  /health         健康检查");
@@ -246,7 +268,11 @@ async fn run_demo() -> Result<()> {
             );
             println!(
                 "      {}",
-                hit.text.chars().take(60).collect::<String>().replace('\n', " ")
+                hit.text
+                    .chars()
+                    .take(60)
+                    .collect::<String>()
+                    .replace('\n', " ")
             );
         }
     }
@@ -293,6 +319,16 @@ async fn run_compare() -> Result<()> {
                 .join(" ");
 
             let hit = all_text.contains(expected);
+
+            info!(
+                question = %question,
+                mode = mode.name(),
+                hits = outcome.hits.len(),
+                matched_expected = hit,
+                retrieve_ms = outcome.retrieve_ms,
+                rerank_ms = outcome.rerank_ms,
+                "模式对比"
+            );
 
             println!(
                 "  {:<8} 命中 {} 个块 | {}  (检索 {}ms / 重排 {}ms)",

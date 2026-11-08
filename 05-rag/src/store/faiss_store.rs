@@ -66,6 +66,7 @@
 //! 所以本项目同时写一个 sidecar JSON（`*.meta.json`）存
 //! `EmbeddedChunk` 的元数据部分。两边靠**相同的顺序**对齐。
 
+use agent_logging::{debug, info, warn};
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -241,6 +242,12 @@ impl VectorStore for FaissStore {
         // 维度检查 —— 这是最常见的「换了模型没重建索引」错误。
         for c in chunks {
             if c.vector.len() != self.dimension {
+                warn!(
+                    expected = self.dimension,
+                    actual = c.vector.len(),
+                    id = %c.id,
+                    "向量维度与索引不匹配（多半是换了模型没重建索引）"
+                );
                 return Err(StoreError::DimensionMismatch {
                     expected: self.dimension,
                     actual: c.vector.len(),
@@ -276,8 +283,16 @@ impl VectorStore for FaissStore {
         }
 
         if fresh.is_empty() {
+            debug!("所有记录 ID 都已存在，跳过写入");
             return Ok(());
         }
+
+        debug!(
+            fresh = fresh.len(),
+            skipped = chunks.len() - fresh.len(),
+            kind = %self.kind.description(),
+            "写入 FAISS 索引"
+        );
 
         let vectors = flatten(&fresh.iter().map(|c| c.vector.clone()).collect::<Vec<_>>());
 
@@ -285,6 +300,10 @@ impl VectorStore for FaissStore {
         // 训练数据就是待写入的向量本身 —— 对教学规模（几百到几千条）
         // 足够 k-means 用了。
         if !self.index.is_trained() {
+            warn!(
+                kind = %self.kind.description(),
+                "索引需要训练（数据量太小时聚类质量会退化）"
+            );
             self.index
                 .train(&vectors)
                 .map_err(|e| StoreError::Faiss(format!("索引训练失败: {e}")))?;
@@ -294,6 +313,7 @@ impl VectorStore for FaissStore {
             .add_with_ids(&vectors, &fresh_ids)
             .map_err(|e| StoreError::Faiss(e.to_string()))?;
 
+        info!(total = self.len(), "FAISS 索引写入完成");
         Ok(())
     }
 
@@ -334,6 +354,13 @@ impl VectorStore for FaissStore {
             });
         }
 
+        debug!(
+            k,
+            hit_count = hits.len(),
+            top_score = hits.first().map(|h| h.score),
+            "FAISS 检索完成"
+        );
+
         Ok(hits)
     }
 
@@ -356,6 +383,13 @@ impl VectorStore for FaissStore {
         let meta_path = meta_path_for(path);
         std::fs::write(&meta_path, serde_json::to_vec_pretty(&meta)?)?;
 
+        info!(
+            path = %path.display(),
+            records = self.label_to_record.len(),
+            kind = %self.kind.description(),
+            "索引已保存"
+        );
+
         Ok(())
     }
 
@@ -371,6 +405,11 @@ impl VectorStore for FaissStore {
 
         // 关键检查：模型不一致说明索引是旧模型建的，必须重建。
         if meta.model_name != self.model_name {
+            warn!(
+                index_model = %meta.model_name,
+                current_model = %self.model_name,
+                "索引是用别的模型建的，必须重建"
+            );
             return Err(StoreError::Faiss(format!(
                 "索引是用模型 `{}` 建的，当前模型是 `{}`，必须重建索引",
                 meta.model_name, self.model_name
@@ -398,6 +437,14 @@ impl VectorStore for FaissStore {
         self.id_to_label = id_to_label;
         self.label_to_record = label_to_record;
         self.next_label = next_label;
+
+        info!(
+            path = %path.display(),
+            records = self.label_to_record.len(),
+            kind = %self.kind.description(),
+            model = %self.model_name,
+            "索引加载完成"
+        );
 
         Ok(())
     }

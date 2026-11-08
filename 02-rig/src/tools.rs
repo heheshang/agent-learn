@@ -15,6 +15,7 @@
 //! `ToolContext` 是工具的「入参通道」：宿主可以把任意类型塞进去，工具里
 //! 用 `get` / `require` 取出来。里面的东西**不会发给模型**。
 
+use agent_logging::{debug, info};
 use rig::prelude::ToolContext;
 use rig::tool::{Tool, ToolErrorKind, ToolExecutionError};
 use rig::{ContextValue, rig_tool};
@@ -32,6 +33,7 @@ use std::convert::Infallible;
     params(a = "第一个加数", b = "第二个加数")
 )]
 pub fn add_two(a: i64, b: i64) -> Result<i64, ToolExecutionError> {
+    debug!(a, b, "工具 add_two 被调用");
     Ok(a + b)
 }
 
@@ -42,6 +44,7 @@ pub fn add_two(a: i64, b: i64) -> Result<i64, ToolExecutionError> {
     params(city = "城市名，例如 北京")
 )]
 pub fn get_weather(city: String) -> Result<String, ToolExecutionError> {
+    info!(city = %city, "工具 get_weather 被调用（返回演示数据）");
     Ok(format!("{city}：晴，25°C，东南风 2 级"))
 }
 
@@ -83,7 +86,11 @@ impl Tool for CountCalls {
         _args: Self::Args,
     ) -> impl Future<Output = Result<Self::Output, Self::Error>> + Send {
         let calls = self.calls.clone();
-        async move { Ok(calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1) }
+        async move {
+            let n = calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+            debug!(calls = n, "工具 count_calls 被调用");
+            Ok(n)
+        }
     }
 }
 
@@ -111,6 +118,7 @@ pub fn whoami(#[rig(context)] context: &mut ToolContext) -> Result<String, ToolE
         .require::<SessionUser>()
         .map_err(|error| ToolExecutionError::new(ToolErrorKind::NotFound, error.to_string()))?;
 
+    info!(user = %user.name, tier = %user.tier, "工具 whoami 被调用");
     Ok(format!("{}（{} 会员）", user.name, user.tier))
 }
 
@@ -126,6 +134,7 @@ pub async fn context_demo() -> anyhow::Result<()> {
     })?;
 
     let user = context.require::<SessionUser>()?;
+    info!(user = %user.name, tier = %user.tier, "ToolContext 中读取到宿主注入的用户");
     println!("=== 工具上下文 ===");
     println!("宿主注入的用户: {} ({})", user.name, user.tier);
     println!("说明: 这些值只存在于进程内，不发给模型。");

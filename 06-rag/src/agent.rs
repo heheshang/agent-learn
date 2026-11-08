@@ -53,6 +53,7 @@
 //! ⚠️ **必须有循环上限**。模型可能反复调同一个工具（工具描述写得不好时很常见），
 //! 没有上限就会变成烧钱的死循环。本项目用 `max_iterations` 兜底。
 
+use agent_logging::{debug, info, warn};
 use genai::chat::{ChatMessage, ChatOptions, ChatRequest, Tool, ToolCall, ToolResponse};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -189,15 +190,20 @@ impl Agent {
     pub async fn run(&self, question: &str) -> RagResult<AgentResult> {
         let question = question.trim();
         if question.is_empty() {
+            warn!("Agent 问题为空");
             return Err(RagError::BadRequest("问题不能为空".to_string()));
         }
+
+        info!(question = %question, max_iterations = self.config.max_iterations, "Agent 开始运行");
 
         let client = genai::Client::builder().build();
 
         // 工具声明 —— 模型靠它知道「能调什么、参数怎么填」。
-        let tools = vec![Tool::new(SEARCH_TOOL_NAME)
-            .with_description("在内部知识库里做语义检索，返回最相关的文档片段")
-            .with_schema(search_tool_schema())];
+        let tools = vec![
+            Tool::new(SEARCH_TOOL_NAME)
+                .with_description("在内部知识库里做语义检索，返回最相关的文档片段")
+                .with_schema(search_tool_schema()),
+        ];
 
         let mut request = ChatRequest::new(vec![
             ChatMessage::system(AGENT_SYSTEM_PROMPT),
@@ -214,10 +220,23 @@ impl Agent {
 
         // ── 工具调用循环 ────────────────────────────────────────
         for iteration in 1..=self.config.max_iterations {
+            debug!(iteration, "Agent 迭代：发起模型请求");
             let response = client
-                .exec_chat(&self.config.generation.model, request.clone(), Some(&options))
+                .exec_chat(
+                    &self.config.generation.model,
+                    request.clone(),
+                    Some(&options),
+                )
                 .await
-                .map_err(|e| RagError::Generation(format!("调用模型失败: {e}")))?;
+                .map_err(|e| {
+                    warn!(
+                        iteration,
+                        model = %self.config.generation.model,
+                        error = %e,
+                        "Agent 模型调用失败"
+                    );
+                    RagError::Generation(format!("调用模型失败: {e}"))
+                })?;
 
             total_usage.prompt_tokens += response.usage.prompt_tokens.unwrap_or(0) as u32;
             total_usage.completion_tokens += response.usage.completion_tokens.unwrap_or(0) as u32;
@@ -228,6 +247,12 @@ impl Agent {
             // 模型不再要求调工具 → 它给出了最终答案，循环结束。
             if calls.is_empty() {
                 let answer = response.first_text().unwrap_or_default().to_string();
+                info!(
+                    iterations = iteration,
+                    tool_call_count = tool_calls.len(),
+                    answer_chars = answer.chars().count(),
+                    "Agent 给出最终答案"
+                );
                 return Ok(AgentResult {
                     answer,
                     tool_calls,
@@ -253,10 +278,18 @@ impl Agent {
         }
 
         // 循环跑完还没拿到答案 —— 最后再问一次，让它基于已有信息作答。
+        warn!(
+            max_iterations = self.config.max_iterations,
+            tool_call_count = tool_calls.len(),
+            "Agent 达到迭代上限，做最后一次收尾生成"
+        );
         let response = client
             .exec_chat(&self.config.generation.model, request, Some(&options))
             .await
-            .map_err(|e| RagError::Generation(format!("调用模型失败: {e}")))?;
+            .map_err(|e| {
+                warn!(error = %e, "Agent 收尾生成失败");
+                RagError::Generation(format!("调用模型失败: {e}"))
+            })?;
 
         total_usage.prompt_tokens += response.usage.prompt_tokens.unwrap_or(0) as u32;
         total_usage.completion_tokens += response.usage.completion_tokens.unwrap_or(0) as u32;
@@ -282,6 +315,7 @@ impl Agent {
     ) -> RagResult<(String, ToolCallRecord)> {
         if call.fn_name != SEARCH_TOOL_NAME {
             // 未知工具 —— 回一个错误说明，让模型自己纠正。
+            warn!(tool = %call.fn_name, iteration, "模型调用了未知工具");
             return Ok((
                 format!("错误：未知工具 `{}`", call.fn_name),
                 ToolCallRecord {
@@ -310,6 +344,7 @@ impl Agent {
             .clamp(1, 20);
 
         if query.is_empty() {
+            warn!(iteration, "检索工具缺少 query 参数");
             return Ok((
                 "错误：缺少 query 参数".to_string(),
                 ToolCallRecord {
@@ -321,10 +356,13 @@ impl Agent {
             ));
         }
 
+        info!(iteration, query = %query, top_k, "Agent 调用检索工具");
+
         // 检索时用模型给的 top_k 覆盖默认配置。
         let result = self.retriever.retrieve_with_top_k(&query, top_k).await?;
 
         let text = if result.is_empty() {
+            warn!(query = %query, "检索没有命中任何块");
             "没有检索到相关资料。".to_string()
         } else {
             result.to_context()

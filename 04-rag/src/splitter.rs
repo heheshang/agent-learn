@@ -15,6 +15,7 @@
 //! 而不是硬按字符数切。后者还会把**标题路径**（`# 文档 > ## 章节`）
 //! 作为前缀附到块文本上 —— 这是提升召回率最有效的单个技巧之一。
 
+use agent_logging::debug;
 use serde::{Deserialize, Serialize};
 
 use crate::loader::LoadedDoc;
@@ -256,6 +257,14 @@ impl Splitter for RecursiveSplitter {
             ));
         }
 
+        debug!(
+            splitter = self.name(),
+            doc = %doc.file_name,
+            chunk_count = chunks.len(),
+            total_tokens = chunks.iter().map(|c| c.token_count).sum::<usize>(),
+            "分块完成"
+        );
+
         chunks
     }
 }
@@ -385,6 +394,15 @@ impl Splitter for StructureAwareSplitter {
                 index += 1;
             }
         }
+
+        debug!(
+            splitter = self.name(),
+            doc = %doc.file_name,
+            section_count = sections.len(),
+            chunk_count = chunks.len(),
+            total_tokens = chunks.iter().map(|c| c.token_count).sum::<usize>(),
+            "分块完成"
+        );
 
         chunks
     }

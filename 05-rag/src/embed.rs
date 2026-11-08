@@ -38,6 +38,7 @@
 //! 维度由模型决定，写死在索引里。**换了模型就必须重建索引** ——
 //! 维度对不上，FAISS 会直接报错或静默返回垃圾结果。
 
+use agent_logging::{debug, info, warn};
 use std::path::PathBuf;
 
 use rag_04::splitter::Chunk;
@@ -162,9 +163,22 @@ pub trait Embedder: Send + Sync {
             })
             .collect();
 
+        debug!(
+            model = %self.model_name(),
+            chunk_count = chunks.len(),
+            dimension = self.dimension(),
+            document_prefix = self.needs_document_prefix(),
+            "开始向量化"
+        );
+
         let vectors = self.embed_documents(&texts)?;
 
         if vectors.len() != chunks.len() {
+            warn!(
+                input = chunks.len(),
+                output = vectors.len(),
+                "嵌入数量不匹配"
+            );
             return Err(EmbedError::Inference(format!(
                 "嵌入数量不匹配: 输入 {} 条, 输出 {} 条",
                 chunks.len(),
@@ -193,6 +207,13 @@ pub trait Embedder: Send + Sync {
                 })
             })
             .collect::<Result<Vec<_>, EmbedError>>()?;
+
+        info!(
+            model = %self.model_name(),
+            chunk_count = out.len(),
+            dimension = dim,
+            "向量化完成"
+        );
 
         Ok(out)
     }
@@ -277,9 +298,23 @@ fn display_name(model: Model) -> &'static str {
 impl LocalEmbedder {
     /// 创建嵌入器（会下载模型，首次较慢）。
     ///
-    /// `cache_dir` 为 `None` 时用 fastembed 默认缓存目录
-    /// （`~/.cache/fastembed` 或 `$FASTEMBED_CACHE_PATH`）。
+    /// ## 缓存目录
+    ///
+    /// **务必传 [`cache_dir`] 返回的绝对路径**，不要传 `None`。
+    ///
+    /// fastembed 的默认缓存目录是**相对路径** `.fastembed_cache`，
+    /// 相对于**当前工作目录**（CWD）。这在 Cargo workspace 里是个经典坑：
+    ///
+    /// ```text
+    /// cargo run  -p rag-05   → CWD = workspace 根 → 缓存到 <root>/.fastembed_cache  ✅
+    /// cd 05-rag && make search → CWD = 05-rag/    → 缓存到 05-rag/.fastembed_cache  ❌ 重新下载 470MB！
+    /// ```
+    ///
+    /// 更糟的是：一旦本地缓存没命中而网络又不通（比如 HuggingFace 被墙），
+    /// 就会直接报 `Failed to retrieve onnx/model.onnx` 而不是给出「缓存路径不对」的提示。
     pub fn new(model: Model, cache_dir: Option<PathBuf>) -> Result<Self, EmbedError> {
+        info!(model = %display_name(model), "开始初始化嵌入模型（首次会下载模型）");
+
         let mut opts =
             fastembed::InitOptions::new(to_fastembed(model)).with_show_download_progress(true);
 
@@ -287,10 +322,20 @@ impl LocalEmbedder {
             opts = opts.with_cache_dir(dir);
         }
 
-        let model_handle =
-            fastembed::TextEmbedding::try_new(opts).map_err(|e| EmbedError::Init(e.to_string()))?;
+        let model_handle = fastembed::TextEmbedding::try_new(opts).map_err(|e| {
+            warn!(model = %display_name(model), error = %e, "嵌入模型初始化失败");
+            EmbedError::Init(e.to_string())
+        })?;
 
         let (dimension, query_prefix, document_prefix) = model_spec(model);
+
+        info!(
+            model = %display_name(model),
+            dimension,
+            query_prefix = query_prefix.unwrap_or("-"),
+            document_prefix = document_prefix.unwrap_or("-"),
+            "嵌入模型就绪"
+        );
 
         Ok(Self {
             model: model_handle,
@@ -320,9 +365,10 @@ impl Embedder for LocalEmbedder {
     }
 
     fn embed_documents(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, EmbedError> {
-        self.model
-            .embed(texts.to_vec(), None)
-            .map_err(|e| EmbedError::Inference(e.to_string()))
+        self.model.embed(texts.to_vec(), None).map_err(|e| {
+            warn!(count = texts.len(), error = %e, "嵌入推理失败");
+            EmbedError::Inference(e.to_string())
+        })
     }
 
     fn embed_query(&self, text: &str) -> Result<Vec<f32>, EmbedError> {
@@ -360,6 +406,32 @@ pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
         return 0.0;
     }
     dot / (na * nb)
+}
+
+/// 嵌入模型的缓存目录（**绝对路径**）。
+///
+/// 1. `FASTEMBED_CACHE_DIR` 环境变量（用户显式指定，最高优先级）
+/// 2. workspace 根目录下的 `.fastembed_cache`
+///
+/// 为什么必须是绝对路径：fastembed 的默认缓存目录是**相对路径** `.fastembed_cache`，
+/// 相对 CWD 解析。在 workspace 里 CWD 会随运行方式变化
+/// （`cargo run -p rag-05` 在根目录，`cd 05-rag && make search` 在子目录），
+/// 一旦解析到另一个目录，模型缓存就miss，会重新下载 470MB；
+/// 网络不通时更是直接报 `Failed to retrieve onnx/model.onnx`。
+///
+/// 与 06/07/08/10/12 的 `cache_dir()` 保持一致。
+pub fn cache_dir() -> PathBuf {
+    if let Some(dir) = std::env::var_os("FASTEMBED_CACHE_DIR")
+        && !dir.is_empty()
+    {
+        return PathBuf::from(dir);
+    }
+
+    // `CARGO_MANIFEST_DIR` = <workspace>/05-rag，往上一级就是 workspace 根。
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .map(|p| p.join(".fastembed_cache"))
+        .unwrap_or_else(|| PathBuf::from(".fastembed_cache"))
 }
 
 #[cfg(test)]
@@ -404,5 +476,11 @@ mod tests {
     #[test]
     fn chunk_id_is_stable() {
         assert_eq!(chunk_id("a.md", 3), "a.md#3");
+    }
+
+    #[test]
+    fn cache_dir_is_absolute() {
+        // 必须是绝对路径，否则从不同 CWD 运行会解析到不同的缓存目录。
+        assert!(cache_dir().is_absolute());
     }
 }

@@ -12,6 +12,7 @@
 //! 分开的意义：调用方能区分「我请求写错了」（改请求）和
 //! 「你服务坏了」（重试/报警），而不用去猜错误消息里的中文。
 
+use agent_logging::{error, warn};
 use thiserror::Error;
 
 /// RAG 系统的错误。
@@ -77,6 +78,21 @@ impl axum::response::IntoResponse for RagError {
 
         let status =
             StatusCode::from_u16(self.status_code()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+
+        // 错误分级：4xx 是调用方的问题，5xx 才是服务端的问题。
+        // 混在一个级别里，告警规则没法区分「用户传错了」和「服务坏了」。
+        match &self {
+            RagError::BadRequest(_) => {
+                warn!(status = status.as_u16(), error = %self, "请求参数不合法");
+            }
+            RagError::NotReady(_) => {
+                warn!(status = status.as_u16(), error = %self, "索引未就绪");
+            }
+            _ => {
+                error!(status = status.as_u16(), error = %self, "请求处理失败");
+            }
+        }
+
         let body = crate::api::models::ErrorResponse {
             error: status.canonical_reason().unwrap_or("Error").to_string(),
             message: self.to_string(),

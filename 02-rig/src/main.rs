@@ -12,15 +12,20 @@ mod middleware;
 mod model_call;
 mod tools;
 
+use agent_logging::{info, init};
 use anyhow::Result;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    init("rig-02");
+
     // 需要环境变量 DEEPSEEK_API_KEY
     if std::env::var("DEEPSEEK_API_KEY").is_err() {
-        eprintln!("请先设置环境变量 DEEPSEEK_API_KEY");
+        agent_logging::error!("未设置环境变量 DEEPSEEK_API_KEY");
         std::process::exit(1);
     }
+
+    info!("开始运行 02-rig 的四个核心概念 demo");
 
     println!("############ 1. 模型与消息调用 ############");
     model_call::single_turn().await?;
@@ -37,6 +42,8 @@ async fn main() -> Result<()> {
 
     println!("\n############ 4. Middleware ############");
     middleware::middleware_demo().await?;
+
+    info!("02-rig 的全部 demo 执行完毕");
 
     Ok(())
 }

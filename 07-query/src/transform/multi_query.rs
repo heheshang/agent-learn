@@ -31,11 +31,10 @@
 //! 去重在 [`crate::fusion`] 里做（按块 ID）。
 
 use crate::llm::Llm;
+use agent_logging::{debug, warn};
 
 use super::prompts::MULTI_QUERY_PROMPT;
-use super::{
-    parse_numbered_lines, QueryTransformer, Strategy, TransformedQuery, TransformFuture,
-};
+use super::{QueryTransformer, Strategy, TransformFuture, TransformedQuery, parse_numbered_lines};
 
 /// Multi-Query 转换器。
 pub struct MultiQueryTransformer {
@@ -112,9 +111,15 @@ impl QueryTransformer for MultiQueryTransformer {
             let items = parse_numbered_lines(&raw, self.num_queries);
 
             if items.is_empty() {
+                warn!("Multi-Query 输出解析不出问法");
                 return Err(crate::error::QueryError::Transformation(
                     "Multi-Query 输出解析不出问法".to_string(),
                 ));
+            }
+
+            debug!(question = %question, query_count = items.len(), "Multi-Query 生成问法");
+            for (i, item) in items.iter().enumerate() {
+                debug!(variant = i + 1, query = %item, "生成的问法");
             }
 
             Ok(items

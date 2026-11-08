@@ -88,7 +88,7 @@ pub mod transform;
 
 pub use config::{AppConfig, TransformConfig};
 pub use error::{QueryError, QueryResult};
-pub use fusion::{FusionMethod, FusedHit, RankedRun};
+pub use fusion::{FusedHit, FusionMethod, RankedRun};
 pub use llm::{GenaiLlm, Llm, LlmOptions};
 pub use pipeline::{AskOutcome, QueryPipeline, TransformedRetrieval};
 pub use retrieval::{EmbedMode, MultiQueryRetriever};

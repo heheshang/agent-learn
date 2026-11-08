@@ -25,6 +25,7 @@
 //! ⚠️ 注意最后一条：生成失败时**检索结果仍然是有价值的**。
 //! 所以 `ask` 在生成失败时把检索结果一起返回，而不是丢弃一切。
 
+use agent_logging::{debug, info, warn};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -155,8 +156,11 @@ impl HybridPipeline {
         let start = Instant::now();
         let query = query.trim();
         if query.is_empty() {
+            warn!("检索问题为空");
             return Err(RagError::BadRequest("问题不能为空".to_string()));
         }
+
+        debug!(query = %query, mode = mode.name(), "开始检索 + 重排");
 
         // ── 1. 混合检索 ──────────────────────────────────────────
         let retrieve_start = Instant::now();
@@ -186,16 +190,34 @@ impl HybridPipeline {
         // 阈值过滤（只对向量路的分数生效 —— BM25 分数不可比）。
         let mut fused_hits = fused_hits;
         if let Some(min) = self.retrieval_config.min_score {
+            let before = fused_hits.len();
             fused_hits.retain(|h| h.vector_score.map(|s| s >= min).unwrap_or(true));
             for (i, hit) in fused_hits.iter_mut().enumerate() {
                 hit.rank = i;
             }
+            debug!(
+                before,
+                after = fused_hits.len(),
+                min_score = min,
+                "阈值过滤完成"
+            );
         }
 
         // ── 2. 重排 ──────────────────────────────────────────────
         let rerank_start = Instant::now();
         let (hits, reranked, degrade_reason) = self.rerank(query, &fused_hits).await;
         let rerank_ms = rerank_start.elapsed().as_millis() as u64;
+
+        info!(
+            query = %query,
+            mode = mode.name(),
+            fused_count = fused_hits.len(),
+            hit_count = hits.len(),
+            reranked,
+            retrieve_ms,
+            rerank_ms,
+            "检索 + 重排完成"
+        );
 
         Ok(RetrievalOutcome {
             query: query.to_string(),
@@ -228,7 +250,11 @@ impl HybridPipeline {
         let Some(reranker) = &self.reranker else {
             // 没有重排器 —— 直接截断。
             return (
-                fused_hits.iter().take(self.rerank_config.top_n).cloned().collect(),
+                fused_hits
+                    .iter()
+                    .take(self.rerank_config.top_n)
+                    .cloned()
+                    .collect(),
                 false,
                 None,
             );
@@ -250,7 +276,10 @@ impl HybridPipeline {
             })
             .collect();
 
-        match reranker.rerank(query, &documents, self.rerank_config.top_n).await {
+        match reranker
+            .rerank(query, &documents, self.rerank_config.top_n)
+            .await
+        {
             Ok(reranked) => {
                 // 把重排结果映射回融合结果（补上两路的分数和共识度）。
                 let by_id: std::collections::HashMap<&str, &HybridHit> =
@@ -271,8 +300,13 @@ impl HybridPipeline {
             }
             Err(e) => {
                 // 降级：退回融合后的原始顺序。
+                warn!(error = %e, "重排失败，降级为融合后的原始顺序");
                 (
-                    fused_hits.iter().take(self.rerank_config.top_n).cloned().collect(),
+                    fused_hits
+                        .iter()
+                        .take(self.rerank_config.top_n)
+                        .cloned()
+                        .collect(),
                     false,
                     Some(format!("重排失败（{e}），降级为融合后的原始顺序")),
                 )
@@ -292,9 +326,8 @@ impl HybridPipeline {
         let retrieval = self.retrieve_with(query, mode).await?;
 
         if retrieval.hits.is_empty() {
-            return Err(RagError::NotReady(
-                "检索没有召回到任何内容".to_string(),
-            ));
+            warn!(query = %query, "检索没有召回到任何内容");
+            return Err(RagError::NotReady("检索没有召回到任何内容".to_string()));
         }
 
         // 组 Prompt —— 复用 06-rag 的组装逻辑（格式一致，便于对比）。
@@ -305,9 +338,21 @@ impl HybridPipeline {
             .llm
             .chat(&prompt.system, &user_prompt)
             .await
-            .map_err(|e| RagError::Generation(e.to_string()))?;
+            .map_err(|e| {
+                warn!(error = %e, "生成失败");
+                RagError::Generation(e.to_string())
+            })?;
 
         let citations = extract_citations(&answer, &retrieval.hits);
+
+        info!(
+            query = %query,
+            mode = mode.name(),
+            hits = retrieval.hits.len(),
+            citations = citations.len(),
+            elapsed_ms = start.elapsed().as_millis() as u64,
+            "问答完成"
+        );
 
         Ok(AskOutcome {
             answer,

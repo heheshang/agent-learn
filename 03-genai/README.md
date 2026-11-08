@@ -60,7 +60,7 @@ graph TB
     end
 
     subgraph Provider["LLM Provider"]
-        API[DeepSeek / OpenAI 兼容端点]
+        API["DeepSeek / OpenAI 兼容端点"]
     end
 
     MAIN --> AgentLayer
@@ -143,50 +143,96 @@ graph LR
 
 > ⚠️ 语义要点：`on_payload` / `on_response` 这类 **per-request** 钩子会**替换**构造期的钩子，两者不叠加 —— 每次物理请求（包括重试）每个通道只触发一次。
 
-### 思维导图：genai 两层的分工
+### 知识地图：genai 两层的分工
 
 ```mermaid
-mindmap
-  root((03-genai<br/>模型 + Agent))
-    模型层 genai
-      Client builder
-      ChatRequest 消息序列
-      exec_chat 单次
-      exec_chat_stream 流式
-      ChatResponseFormat JsonMode
-      Tool 声明
-      ToolResponse 回填
-      无状态 历史自持
-    Agent 层 rust-genai-agent
-      AgentState 状态
-        system_prompt
-        model
-        tools
-        messages 历史累积
-      AgentConfig 配置
-        with_initial_state
-        with_stream_fn
-        with_before_tool_call
-        with_after_tool_call
-      AgentEvent 事件
-        MessageUpdate TextDelta
-        ToolExecutionStart
-        ToolExecutionEnd
-        TurnEnd
-      Subscription RAII
-      有状态 自动收敛
-    手工工具循环
-      发请求
-      拿 tool_calls
-      执行工具
-      结果作为 tool 消息回填
-      再发请求
-      模型给最终答案
-    依赖陷阱
-      必须用 AgentPrism fork
-      package = genai-agentprism
-      lib 名仍是 genai
-      两版本类型不互通
+graph LR
+    N1(("03-genai<br/>模型 + Agent"))
+    subgraph N2["模型层 genai"]
+        N3["Client builder"]
+        N2 --> N3
+        N4["ChatRequest 消息序列"]
+        N2 --> N4
+        N5["exec_chat 单次"]
+        N2 --> N5
+        N6["exec_chat_stream 流式"]
+        N2 --> N6
+        N7["ChatResponseFormat JsonMode"]
+        N2 --> N7
+        N8["Tool 声明"]
+        N2 --> N8
+        N9["ToolResponse 回填"]
+        N2 --> N9
+        N10["无状态 历史自持"]
+        N2 --> N10
+    end
+    N1 --> N2
+    subgraph N11["Agent 层 rust-genai-agent"]
+        subgraph N12["AgentState 状态"]
+            N13["system_prompt"]
+            N12 --> N13
+            N14["model"]
+            N12 --> N14
+            N15["tools"]
+            N12 --> N15
+            N16["messages 历史累积"]
+            N12 --> N16
+        end
+        N11 --> N12
+        subgraph N17["AgentConfig 配置"]
+            N18["with_initial_state"]
+            N17 --> N18
+            N19["with_stream_fn"]
+            N17 --> N19
+            N20["with_before_tool_call"]
+            N17 --> N20
+            N21["with_after_tool_call"]
+            N17 --> N21
+        end
+        N11 --> N17
+        subgraph N22["AgentEvent 事件"]
+            N23["MessageUpdate TextDelta"]
+            N22 --> N23
+            N24["ToolExecutionStart"]
+            N22 --> N24
+            N25["ToolExecutionEnd"]
+            N22 --> N25
+            N26["TurnEnd"]
+            N22 --> N26
+        end
+        N11 --> N22
+        N27["Subscription RAII"]
+        N11 --> N27
+        N28["有状态 自动收敛"]
+        N11 --> N28
+    end
+    N1 --> N11
+    subgraph N29["手工工具循环"]
+        N30["发请求"]
+        N29 --> N30
+        N31["拿 tool_calls"]
+        N29 --> N31
+        N32["执行工具"]
+        N29 --> N32
+        N33["结果作为 tool 消息回填"]
+        N29 --> N33
+        N34["再发请求"]
+        N29 --> N34
+        N35["模型给最终答案"]
+        N29 --> N35
+    end
+    N1 --> N29
+    subgraph N36["依赖陷阱"]
+        N37["必须用 AgentPrism fork"]
+        N36 --> N37
+        N38["package = genai-agentprism"]
+        N36 --> N38
+        N39["lib 名仍是 genai"]
+        N36 --> N39
+        N40["两版本类型不互通"]
+        N36 --> N40
+    end
+    N1 --> N36
 ```
 
 ### ⚠️ 依赖陷阱（必读）
@@ -467,7 +513,6 @@ let stream_fn = GenaiStreamFn::with_exec_hooks(
 注意两个 `calculate` 是**并行**执行的 —— `ToolExecutionMode::Parallel` 是默认值。
 
 middleware 生效的证据：
-
 ```
   [middleware] before: calculate args={"expression":"(12 + 34) * 2"}
   [middleware] after: calculate is_error=false
@@ -487,6 +532,28 @@ middleware 生效的证据：
 
 第二轮模型答对了「你叫 Rodriguez」—— 历史确实带过去了。
 
+## 日志
+
+全仓库统一走 `00-logging`（`agent-logging`）。
+
+```bash
+RUST_LOG=info cargo run -p genai-03
+RUST_LOG=debug,genai_03=trace cargo run -p genai-03
+```
+
+| 事件 | 级别 | 关键字段 |
+|---|---|---|
+| 单轮对话完成 | `INFO` | `model` / `prompt_tokens` / `completion_tokens` / `total_tokens` |
+| 模型停止原因 | `DEBUG` | `stop_reason` |
+| 多轮对话每轮请求 | `INFO` | `question` / `message_count` |
+| 流式输出结束 | `INFO` | `chars` |
+| JSON 模式解析成功 | `INFO` | — |
+| JSON 模式解析失败（模型没听话） | `WARN` | `error` |
+| 模型要求调用工具 | `INFO` | `tool` / `args` |
+| 工具执行成功 | `DEBUG` | `expression` / `value` |
+| 工具结果回填，发起第二轮 | `INFO` | — |
+| 模型调用失败 | `ERROR` | `error` |
+
 ---
 
 ## 7. 文件结构
@@ -502,6 +569,155 @@ middleware 生效的证据：
     ├── agent_demo.rs  # Agent 层：create_agent/事件/middleware/状态
     └── tools.rs       # 算术工具（手写求值器，无外部依赖）+ 单元测试
 ```
+
+---
+
+## 思维导图：genai 的两层结构
+
+```mermaid
+mindmap
+  root((rust-genai))
+    模型层 genai
+      Client 无状态
+      exec_chat
+      ChatRequest
+        system message
+        user message
+        tool_result
+      ChatOptions
+        temperature
+        max_tokens
+        reasoning_effort
+      流式
+        exec_chat_stream
+        TextDelta
+      工具调用
+        ToolDefinition
+        JSON Schema
+        原始 tool_call
+    Agent 层 rust-genai-agent
+      Agent 有状态 facade
+        state messages 累积
+        set_system_prompt
+        reset
+      AgentTool
+        FnTool from_value_fn
+        FnTool new 完整版
+        ToolSpec
+          name
+          description
+          schema
+      自动循环
+        校验参数
+        执行工具
+        回填结果
+        再问模型
+      钩子 middleware
+        before_tool_call 改参数
+        after_tool_call 审计
+        transform_context
+        on_payload HTTP 请求
+        on_response HTTP 响应
+      事件系统 AgentEvent
+        MessageUpdate TextDelta
+        ToolExecutionStart
+        ToolExecutionEnd
+        TurnEnd
+        Subscription RAII 退订
+      取消 CancellationToken
+    核心认知
+      模型层无状态 历史自己带
+      Agent 层有状态 自动循环
+      钩子是可扩展点 不是装饰
+      订阅必须持有到结束
+```
+
+---
+
+## 技术参考速查
+
+### 两层 API 对照表
+
+| | 模型层（`genai`） | Agent 层（`rust-genai-agent`） |
+|---|---|---|
+| 客户端 | `genai::Client` | `Agent` |
+| 状态 | **无状态**，历史自己带 | **有状态**，`state().messages` 累积 |
+| 工具 | 只**声明**（`ToolDefinition`） | **执行**（`AgentTool`） |
+| 循环 | 手工写 | 框架自动跑 |
+| 钩子 | 无 | `before/after_tool_call` 等 |
+| 事件 | 无 | `AgentEvent` 流 |
+| 适合 | 精确控制每一步 | 快速拿到「能调用工具」的效果 |
+
+⚠️ **模型层声明了工具，模型只会「请求调用」—— 执行是你自己的事**。
+Agent 层才把这个循环自动化。
+
+### `ChatOptions` 关键项
+
+| 选项 | 作用 | 本项目踩过的坑 |
+|---|---|---|
+| `temperature` | 采样随机性 | judge 场景必须 `0.0` |
+| `max_tokens` | **输出预算上限** | ⚠️ 推理模型的思考 token **共用**这个预算 |
+| `reasoning_effort` | 推理强度 | `ReasoningEffort::Zero` 可关闭思考 |
+
+⚠️ **`max_tokens` 与思考模式的坑**：
+
+```text
+deepseek-flash, max_tokens=1024, 开启思考：
+  reasoning_tokens = 1024  →  正文长度 0  →  finish_reason: length
+关闭思考：
+  completion_tokens = 78  →  正文正常
+```
+
+这个坑在 09-rag-eval 的 judge 指标上表现成「大面积解析失败」，
+根因就在这里。解法：`ReasoningEffort::Zero` + 调大 `max_tokens`。
+
+### `FnTool` 两种写法
+
+| | `FnTool::from_value_fn` | `FnTool::new` |
+|---|---|---|
+| 拿到什么 | 只有 `args`（已校验、已按 schema 强制类型） | `ToolCallContext` + `CancellationToken` + `UpdateSink` |
+| 能做什么 | 计算、返回 JSON | 流式上报中间结果、响应取消 |
+| 代码量 | 少 | 多 |
+
+⚠️ `from_value_fn` 的 `args` **已经按 schema 强制过类型** ——
+你拿到的 `expression` 一定是字符串，不用自己判类型。
+
+### 钩子速查表
+
+| 钩子 | 挂载点 | 能做什么 | 返回值语义 |
+|---|---|---|---|
+| `before_tool_call` | 工具执行前 | 审计、改写参数、拦截 | `None` = 放行；`Some` = 覆盖结果 |
+| `after_tool_call` | 工具执行后 | 审计、统一加工结果 | `None` = 不改；`Some` = 覆盖 content / is_error |
+| `transform_context` | 上下文构造时 | 改写发给模型的消息 | — |
+| `on_payload` | HTTP 请求 | 打点、改写 body | — |
+| `on_response` | HTTP 响应 | 打点、记录状态码 | — |
+
+⚠️ `before_tool_call` 里改写参数是**非常实用**的技巧 ——
+本项目用它把 `"计算 ( 12 + 34 ) * 2"` 里的空格去掉，减少解析失败。
+
+### `AgentEvent` 事件流
+
+| 事件 | 时机 | 典型用途 |
+|---|---|---|
+| `MessageUpdate { TextDelta }` | 模型正在输出 | **流式打印** |
+| `ToolExecutionStart { tool_name, args }` | 工具开始执行 | 审计日志 |
+| `ToolExecutionEnd { is_error, result }` | 工具执行完 | 记录耗时 / 结果 |
+| `TurnEnd { tool_results }` | 一轮结束 | 统计工具调用数 |
+
+⚠️ **`Subscription` 必须持有到运行结束** —— 它是 RAII 退订句柄。
+提前 `drop` 就收不到后续事件了（本项目每个 demo 结尾都显式 `drop(subscription)`）。
+
+### `AgentState` 可变项
+
+| 操作 | 效果 |
+|---|---|
+| `agent.state().messages` | 读已提交历史（跨 `prompt()` 累积） |
+| `agent.set_system_prompt(...)` | 运行时改系统提示 |
+| `agent.reset()` | 清空历史回到初始状态 |
+| `agent.state().tools` | 读工具集 |
+
+⚠️ 对比 02-rig：**rig 的 `Agent` 也是有状态的**，但 rig 用
+`AgentBuilder::memory` 表达跨运行状态，genai 直接把 `messages` 放在 `AgentState` 里。
 
 ---
 

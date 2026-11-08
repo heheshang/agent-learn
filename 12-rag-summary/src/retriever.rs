@@ -53,6 +53,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use agent_logging::{debug, warn};
 use rag_05::embed::Embedder;
 use rag_08::bm25::{Bm25Document, Bm25Hit, Bm25Index};
 use rag_08::hybrid::RRF_K;
@@ -263,6 +264,8 @@ impl HybridRetriever {
             .await
             .map_err(|e| RagError::Retrieval(format!("Milvus 稠密检索失败: {e}")))?;
 
+        debug!(path = "dense", hit_count = hits.len(), "稠密检索完成");
+
         Ok(assign_ranks(to_hits(
             hits.into_iter()
                 .map(|h| (h.id, h.score, h.source, h.heading_path, h.text))
@@ -274,6 +277,11 @@ impl HybridRetriever {
     /// 纯关键词检索（对照组 B —— 客户端 BM25）。
     pub async fn search_keyword(&self, query: &str, k: usize) -> RagResult<Vec<Hit>> {
         let bm25_hits = self.bm25.search(query, k.max(1));
+        debug!(
+            path = "keyword",
+            hit_count = bm25_hits.len(),
+            "客户端 BM25 检索完成"
+        );
         Ok(assign_ranks(to_hits(
             bm25_hits
                 .into_iter()
@@ -300,6 +308,12 @@ impl HybridRetriever {
             .search_hybrid(&vector, query, k.max(1), per_path_k.max(1), None)
             .await
             .map_err(|e| RagError::Retrieval(format!("Milvus 混合检索失败: {e}")))?;
+
+        debug!(
+            path = "server_hybrid",
+            hit_count = hits.len(),
+            "服务端混合检索完成"
+        );
 
         Ok(assign_ranks(to_hits(
             hits.into_iter()
@@ -331,7 +345,13 @@ impl HybridRetriever {
 
         let bm25_hits = self.bm25.search(query, per_path_k.max(1));
 
-        Ok(assign_ranks(fuse_rrf(dense_hits, bm25_hits, k)))
+        let fused = fuse_rrf(dense_hits, bm25_hits, k);
+        debug!(
+            path = "client_fusion",
+            hit_count = fused.len(),
+            "客户端双路融合完成"
+        );
+        Ok(assign_ranks(fused))
     }
 
     /// 嵌入查询（放到阻塞线程池，避免卡住 tokio 工作线程）。
@@ -383,6 +403,7 @@ impl Retriever for HybridRetriever {
                         Ok(hits) => Ok(hits),
                         Err(server_err) => {
                             // 服务端失败 —— 降级到客户端融合。
+                            warn!(error = %server_err, "服务端混合检索失败，降级到客户端融合");
                             match self.search_client_fusion(query, k, per_path_k).await {
                                 Ok(client) if !client.is_empty() => Ok(client),
                                 _ => Err(server_err),

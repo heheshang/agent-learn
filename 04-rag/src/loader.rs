@@ -18,6 +18,7 @@
 //! 中间表示，再导出成 Markdown —— 标题变成了 `#` / `##`，
 //! 分块器就能沿着标题边界切，这是「结构感知分块」的前提。
 
+use agent_logging::{debug, info, warn};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -143,15 +144,26 @@ impl DocumentLoader for MarkdownLoader {
     }
 
     fn load(&self, path: &Path) -> Result<LoadedDoc, LoaderError> {
-        let text = std::fs::read_to_string(path).map_err(|source| LoaderError::Io {
-            path: path.to_path_buf(),
-            source,
+        let text = std::fs::read_to_string(path).map_err(|source| {
+            warn!(path = %path.display(), error = %source, "Markdown 加载失败");
+            LoaderError::Io {
+                path: path.to_path_buf(),
+                source,
+            }
         })?;
 
         let file_name = path
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
+
+        debug!(
+            path = %path.display(),
+            file_name = %file_name,
+            chars = text.chars().count(),
+            lines = text.lines().count(),
+            "Markdown 加载完成"
+        );
 
         Ok(LoadedDoc {
             source: path.to_path_buf(),
@@ -179,11 +191,13 @@ impl DocumentLoader for PdfTextLoader {
 
     fn load(&self, path: &Path) -> Result<LoadedDoc, LoaderError> {
         // 逐页抽取，这样能同时拿到页数。
-        let pages =
-            pdf_extract::extract_text_by_pages(path).map_err(|e| LoaderError::PdfParse {
+        let pages = pdf_extract::extract_text_by_pages(path).map_err(|e| {
+            warn!(path = %path.display(), error = %e, "PDF 文本层抽取失败");
+            LoaderError::PdfParse {
                 path: path.to_path_buf(),
                 message: e.to_string(),
-            })?;
+            }
+        })?;
 
         let page_count = pages.len();
         let text = pages.join("\n\n");
@@ -192,6 +206,13 @@ impl DocumentLoader for PdfTextLoader {
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
+
+        info!(
+            path = %path.display(),
+            page_count,
+            chars = text.chars().count(),
+            "PDF 文本层加载完成（结构已丢失）"
+        );
 
         Ok(LoadedDoc {
             source: path.to_path_buf(),
@@ -235,19 +256,24 @@ impl DocumentLoader for DoclingLoader {
     }
 
     fn load(&self, path: &Path) -> Result<LoadedDoc, LoaderError> {
-        let source =
-            docling::SourceDocument::from_file(path).map_err(|e| LoaderError::DoclingConvert {
+        let source = docling::SourceDocument::from_file(path).map_err(|e| {
+            warn!(path = %path.display(), error = %e, "Docling 读取源文件失败");
+            LoaderError::DoclingConvert {
                 path: path.to_path_buf(),
                 message: e.to_string(),
-            })?;
+            }
+        })?;
 
         // `text_layer_only` = 只抽文本层，不跑版面分析（因此不需要 ONNX 模型）。
         let result = docling::DocumentConverter::new()
             .text_layer_only(true)
             .convert(source)
-            .map_err(|e| LoaderError::DoclingConvert {
-                path: path.to_path_buf(),
-                message: e.to_string(),
+            .map_err(|e| {
+                warn!(path = %path.display(), error = %e, "Docling 转换失败");
+                LoaderError::DoclingConvert {
+                    path: path.to_path_buf(),
+                    message: e.to_string(),
+                }
             })?;
 
         let text = result.document.export_to_markdown();
@@ -256,6 +282,14 @@ impl DocumentLoader for DoclingLoader {
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
+
+        info!(
+            path = %path.display(),
+            file_name = %file_name,
+            chars = text.chars().count(),
+            headings = text.lines().filter(|l| l.starts_with('#')).count(),
+            "Docling 结构感知加载完成"
+        );
 
         Ok(LoadedDoc {
             source: path.to_path_buf(),
@@ -282,7 +316,11 @@ pub fn loader_for(path: &Path) -> Option<Box<dyn DocumentLoader>> {
         "pdf" => Some(Box::new(DoclingLoader)),
         "html" | "htm" => Some(Box::new(DoclingLoader)),
         other => {
-            eprintln!("跳过不支持的文件类型: {other} ({})", path.display());
+            debug!(
+                ext = %other,
+                path = %path.display(),
+                "跳过不支持的文件类型"
+            );
             None
         }
     }
@@ -292,9 +330,12 @@ pub fn loader_for(path: &Path) -> Option<Box<dyn DocumentLoader>> {
 pub fn load_directory(dir: &Path) -> Result<Vec<LoadedDoc>, LoaderError> {
     let mut docs = Vec::new();
 
-    let entries = std::fs::read_dir(dir).map_err(|source| LoaderError::Io {
-        path: dir.to_path_buf(),
-        source,
+    let entries = std::fs::read_dir(dir).map_err(|source| {
+        warn!(dir = %dir.display(), error = %source, "读取目录失败");
+        LoaderError::Io {
+            path: dir.to_path_buf(),
+            source,
+        }
     })?;
 
     // 排序保证加载顺序稳定（否则每次 run 结果可能不同）。
@@ -313,5 +354,6 @@ pub fn load_directory(dir: &Path) -> Result<Vec<LoadedDoc>, LoaderError> {
         }
     }
 
+    info!(doc_count = docs.len(), dir = %dir.display(), "目录加载完成");
     Ok(docs)
 }

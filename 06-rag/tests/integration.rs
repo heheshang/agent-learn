@@ -39,13 +39,10 @@ async fn make_retriever(data_dir: &std::path::Path, top_k: usize) -> Retriever {
     let embedder = rag_06::index::make_embedder(EmbeddingModel::MultilingualE5Small.to_model())
         .expect("创建嵌入器失败（模型未下载？）");
 
-    let (store, _stats) = rag_06::index::build_store(
-        &embedder,
-        data_dir,
-        &rag_06::index::IndexOptions::default(),
-    )
-    .await
-    .expect("建索引失败");
+    let (store, _stats) =
+        rag_06::index::build_store(&embedder, data_dir, &rag_06::index::IndexOptions::default())
+            .await
+            .expect("建索引失败");
 
     Retriever::new(
         store,
@@ -104,7 +101,9 @@ async fn retrieves_correct_section_for_specific_question() {
 
         assert!(
             top_heading.contains(expected_section)
-                || top.text.contains(&expected_section[..expected_section.len().min(4)]),
+                || top
+                    .text
+                    .contains(&expected_section[..expected_section.len().min(4)]),
             "问题「{question}」期望命中「{expected_section}」，实际命中「{top_heading}」"
         );
     }
@@ -139,8 +138,8 @@ async fn empty_query_is_rejected() {
 #[tokio::test]
 async fn min_score_filters_out_weak_matches() {
     let dir = temp_kb_dir();
-    let embedder = rag_06::index::make_embedder(EmbeddingModel::MultilingualE5Small.to_model())
-        .unwrap();
+    let embedder =
+        rag_06::index::make_embedder(EmbeddingModel::MultilingualE5Small.to_model()).unwrap();
     let (store, _) = rag_06::index::build_store(
         &embedder,
         dir.path(),
@@ -170,8 +169,8 @@ async fn min_score_filters_out_weak_matches() {
 #[tokio::test]
 async fn index_survives_save_and_load() {
     let dir = temp_kb_dir();
-    let embedder = rag_06::index::make_embedder(EmbeddingModel::MultilingualE5Small.to_model())
-        .unwrap();
+    let embedder =
+        rag_06::index::make_embedder(EmbeddingModel::MultilingualE5Small.to_model()).unwrap();
 
     let index_path = dir.path().join("index.faiss");
     let stats = rag_06::index::build_and_save(
@@ -186,7 +185,9 @@ async fn index_survives_save_and_load() {
     assert!(stats.chunk_count >= 7);
 
     // 重新加载，检索结果必须一致。
-    let loaded = rag_06::index::load_store(&embedder, &index_path).await.unwrap();
+    let loaded = rag_06::index::load_store(&embedder, &index_path)
+        .await
+        .unwrap();
     assert_eq!(loaded.len(), stats.chunk_count);
 }
 

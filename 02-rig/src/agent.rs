@@ -19,6 +19,7 @@
 //!
 //! 每轮的工具调用、结果回填、重试，都是 Agent 负责的。
 
+use agent_logging::{debug, info};
 use rig::prelude::{Agent, AgentBuilder};
 use rig::providers::deepseek;
 use rig::providers::openai::OpenAI;
@@ -55,6 +56,11 @@ pub fn build_agent_with(with_whoami: bool) -> anyhow::Result<Agent> {
         builder = builder.tool(Whoami);
     }
 
+    info!(
+        with_whoami,
+        tools = if with_whoami { 4 } else { 3 },
+        "Agent 已构造"
+    );
     Ok(builder.build())
 }
 
@@ -65,15 +71,18 @@ pub fn build_agent_with(with_whoami: bool) -> anyhow::Result<Agent> {
 pub async fn agent_with_tools() -> anyhow::Result<()> {
     let agent = build_agent()?;
 
+    info!("发起 Agent 提示（max_turns=5）");
     let response = agent
         .prompt("北京今天天气怎么样？直接告诉我结论就行。")
         .max_turns(5)
         .await?;
+    info!(message_count = response.messages().len(), "Agent 运行结束");
 
     println!("=== Agent 自主调用工具 ===");
     println!("最终回答: {}", response.output());
     println!("本次运行共 {} 条消息:", response.messages().len());
     for message in response.messages() {
+        debug!(message = ?message, "Agent 消息");
         println!("  - {message:?}");
     }
     Ok(())
@@ -96,10 +105,12 @@ pub async fn agent_state() -> anyhow::Result<()> {
 
     // 工具实例状态：CountCalls 内部用 Arc<AtomicUsize> 计数，
     // 同一次运行里多次调用会累加。
+    info!("发起 Agent 提示：连续调用 count_calls 三次");
     let response = agent
         .prompt("请连续调用 count_calls 工具三次，然后告诉我调用了几次。")
         .max_turns(8)
         .await?;
+    info!("工具实例状态 demo 完成");
     println!("=== 工具实例状态 ===");
     println!("{}", response.output());
 
@@ -114,10 +125,12 @@ pub async fn agent_state() -> anyhow::Result<()> {
     })?;
 
     // 模型看不到 ToolContext 里的值，必须通过调用 `whoami` 工具才能知道。
+    info!("发起 Agent 提示：通过 whoami 工具读取 ToolContext");
     let response = agent
         .prompt("调用 whoami 工具，告诉我我是谁。")
         .tool_context(context)
         .await?;
+    info!("ToolContext demo 完成");
     println!("\n=== 运行内状态 (ToolContext) ===");
     println!("{}", response.output());
 
@@ -133,13 +146,16 @@ pub async fn agent_with_history() -> anyhow::Result<()> {
     let agent = build_agent()?;
     let mut history: Vec<rig::prelude::Message> = Vec::new();
 
+    info!("发起第 1 轮对话");
     let first = agent.chat("我叫 Rodriguez，记住我。", &mut history).await?;
     println!("=== 对话历史 ===");
     println!("第 1 轮: {}", first.output());
 
+    info!(history_len = history.len(), "发起第 2 轮对话");
     let second = agent.chat("我刚才说我叫什么？", &mut history).await?;
     println!("第 2 轮: {}", second.output());
     println!("历史消息数: {}", history.len());
+    info!(history_len = history.len(), "对话历史 demo 完成");
 
     Ok(())
 }

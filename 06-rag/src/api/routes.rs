@@ -8,7 +8,7 @@
 //! |---|---|
 //! | `TimeoutLayer` | LLM 调用可能挂起，没有超时会拖垮整个服务 |
 //! | `RequestBodyLimitLayer` | 防止超大请求体打爆内存 |
-//! | `TraceLayer` | 打印每个请求的方法、路径、耗时 |
+//! | `trace_layer` | 打印每个请求的方法、路径、耗时、状态码，并分配 `request_id` |
 //!
 //! ⚠️ 超时设成 120 秒 —— LLM 调用（尤其推理模型）本来就慢，
 //! 但也不能无限等，否则一个挂死的请求会占着连接不放。
@@ -21,14 +21,14 @@
 
 use std::time::Duration;
 
-use axum::routing::{get, post};
+use agent_logging::trace_layer;
 use axum::Router;
+use axum::routing::{get, post};
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::timeout::TimeoutLayer;
-use tower_http::trace::TraceLayer;
 
-use crate::api::handlers;
 use crate::api::AppState;
+use crate::api::handlers;
 
 /// LLM 请求超时。
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
@@ -50,6 +50,8 @@ pub fn router(state: AppState) -> Router {
             REQUEST_TIMEOUT,
         ))
         .layer(RequestBodyLimitLayer::new(MAX_BODY_SIZE))
-        .layer(TraceLayer::new_for_http())
+        // 请求追踪：给每个请求分配 request_id，
+        // handler 内部的日志会自动带上它。
+        .layer(trace_layer())
         .with_state(state)
 }

@@ -162,8 +162,9 @@ impl TransformedQuery {
 ///
 /// 和 [`crate::llm::LlmFuture`] 同一个理由 —— trait 要 dyn 兼容，
 /// 就不能用 `async fn` 或 RPITIT，必须显式装箱。
-pub type TransformFuture<'a> =
-    std::pin::Pin<Box<dyn std::future::Future<Output = QueryResult<Vec<TransformedQuery>>> + Send + 'a>>;
+pub type TransformFuture<'a> = std::pin::Pin<
+    Box<dyn std::future::Future<Output = QueryResult<Vec<TransformedQuery>>> + Send + 'a>,
+>;
 
 /// 查询改写器 trait。
 ///
@@ -471,12 +472,7 @@ impl QueryTransformer for NoopTransformer {
     }
 
     fn transform<'a>(&'a self, question: &'a str) -> TransformFuture<'a> {
-        Box::pin(async move {
-            Ok(vec![TransformedQuery::new(
-                question.trim(),
-                Strategy::None,
-            )])
-        })
+        Box::pin(async move { Ok(vec![TransformedQuery::new(question.trim(), Strategy::None)]) })
     }
 }
 
@@ -544,19 +540,13 @@ impl QueryTransformer for FallibleTransformer {
                     if let Some(handler) = &self.on_degrade {
                         handler("改写返回空结果，降级为原问题".to_string());
                     }
-                    Ok(vec![TransformedQuery::new(
-                        question,
-                        self.inner.strategy(),
-                    )])
+                    Ok(vec![TransformedQuery::new(question, self.inner.strategy())])
                 }
                 Err(e) => {
                     if let Some(handler) = &self.on_degrade {
                         handler(format!("改写失败（{e}），降级为原问题"));
                     }
-                    Ok(vec![TransformedQuery::new(
-                        question,
-                        self.inner.strategy(),
-                    )])
+                    Ok(vec![TransformedQuery::new(question, self.inner.strategy())])
                 }
             }
         })
@@ -699,9 +689,7 @@ mod tests {
                 Strategy::Hyde
             }
             fn transform<'a>(&'a self, _q: &'a str) -> TransformFuture<'a> {
-                Box::pin(async move {
-                    Err(QueryError::Transformation("模型挂了".to_string()))
-                })
+                Box::pin(async move { Err(QueryError::Transformation("模型挂了".to_string())) })
             }
         }
 

@@ -27,11 +27,12 @@
 
 use std::path::PathBuf;
 
+use agent_logging::{info, init};
 use anyhow::Result;
 
 use rag_05::{
-    build_chunks, cosine_similarity, index_path, ChromaStore, Embedder, FaissStore, IndexConfig,
-    IndexKind, LocalEmbedder, Model, VectorStore,
+    ChromaStore, Embedder, FaissStore, IndexConfig, IndexKind, LocalEmbedder, Model, VectorStore,
+    build_chunks, cosine_similarity, index_path,
 };
 
 /// 测试数据目录 —— 复用 Part 1 的文档。
@@ -71,7 +72,10 @@ const CHROMA_COLLECTION: &str = "rag05_demo";
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    init("rag-05");
+
     let demo = std::env::args().nth(1).unwrap_or_else(|| "all".to_string());
+    info!(demo = %demo, "启动 05-rag");
 
     match demo.as_str() {
         "embed" => run_embed_demo().await?,
@@ -93,12 +97,17 @@ async fn main() -> Result<()> {
         ),
     }
 
+    info!("05-rag 执行完毕");
     Ok(())
 }
 
 /// 创建配置好的嵌入器（默认多语言 E5，中英文都能用）。
+///
+/// 显式传 `embed::cache_dir()`（绝对路径），
+/// 避免 CWD 变化导致模型缓存 miss、重新下载 470MB。
 fn make_embedder() -> Result<LocalEmbedder> {
-    LocalEmbedder::new(Model::MultilingualE5Small, None).map_err(|e| anyhow::anyhow!("{e}"))
+    LocalEmbedder::new(Model::MultilingualE5Small, Some(rag_05::embed::cache_dir()))
+        .map_err(|e| anyhow::anyhow!("{e}"))
 }
 
 /// Demo 1：向量化 —— 理解 embedding 的数值行为。
@@ -173,7 +182,8 @@ async fn run_embed_demo() -> Result<()> {
 
     // ── 对称 vs 非对称 ───────────────────────────────────────
     println!("\n--- 对称模型（MiniLM）对比 ---");
-    let symmetric = LocalEmbedder::new(Model::MiniLM, None).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let symmetric = LocalEmbedder::new(Model::MiniLM, Some(rag_05::embed::cache_dir()))
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
     println!("  模型: {}", symmetric.model_name());
     println!(
         "  前缀: 查询={} 文档={}（对称模型两边都不加）",
@@ -262,7 +272,15 @@ async fn run_search_demo() -> Result<()> {
         println!("\n--- 查询: {q} ---");
         let qv = embedder.embed_query(q)?;
         let hits = store.search(&qv, 3).await?;
+        info!(query = %q, hit_count = hits.len(), "检索完成");
         for (rank, hit) in hits.iter().enumerate() {
+            info!(
+                rank = rank + 1,
+                id = %hit.id,
+                score = hit.score,
+                heading = %hit.heading_path.join(" > "),
+                "命中块"
+            );
             println!("  #{} {}", rank + 1, hit.summary());
         }
     }
@@ -339,6 +357,15 @@ async fn run_compare_demo() -> Result<()> {
         let bytes = build.chunks.len() * dim * 4;
         let mb = bytes as f64 / (1024.0 * 1024.0);
 
+        info!(
+            kind = %kind.description(),
+            records = store.len(),
+            elapsed_ms = build_ms + search_ms,
+            agree_pct = agree * 100 / total.max(1),
+            memory_mb = mb,
+            "索引类型对比"
+        );
+
         println!(
             "{:<12} {:>8} {:>10} {:>13}% {:>10.2}",
             kind.description(),
@@ -410,11 +437,18 @@ async fn run_persist_demo() -> Result<()> {
 
     // 演示「换了模型没重建索引」会被拦住。
     println!("\n--- 换模型会怎样 ---");
-    let other = LocalEmbedder::new(Model::BGESmallZH, None).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let other = LocalEmbedder::new(Model::BGESmallZH, Some(rag_05::embed::cache_dir()))
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
     let mut mismatched = FaissStore::new(IndexKind::Flat, other.dimension(), other.model_name())?;
     match mismatched.load(&path).await {
-        Ok(()) => println!("  （竟然加载成功了？）"),
-        Err(e) => println!("  ✓ 被拒绝: {e}"),
+        Ok(()) => {
+            agent_logging::warn!("换了模型竟然加载成功了 —— 这不对，索引应该被拒绝");
+            println!("  （竟然加载成功了？）")
+        }
+        Err(e) => {
+            info!(error = %e, "换模型加载被正确拒绝");
+            println!("  ✓ 被拒绝: {e}")
+        }
     }
 
     Ok(())
@@ -441,6 +475,7 @@ async fn run_chroma_demo() -> Result<()> {
     {
         Ok(s) => s,
         Err(e) => {
+            agent_logging::warn!(error = %e, "Chroma 服务未连接，跳过该 demo");
             println!("  Chroma 服务未连接（{e}）");
             println!("  启动方式:");
             println!("    uv venv .venv && uv pip install --python .venv/bin/python chromadb");
@@ -449,6 +484,11 @@ async fn run_chroma_demo() -> Result<()> {
             return Ok(());
         }
     };
+    info!(
+        endpoint = CHROMA_ENDPOINT,
+        collection = CHROMA_COLLECTION,
+        "已连接 Chroma"
+    );
     println!(
         "  已连接: {} (集合: {})",
         CHROMA_ENDPOINT,

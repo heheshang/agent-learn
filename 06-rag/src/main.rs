@@ -19,16 +19,21 @@
 
 use std::sync::Arc;
 
+use agent_logging::{info, init, stage_guard};
 use anyhow::Result;
 use rag_06::agent::{Agent, AgentConfig};
-use rag_06::api::{routes, AppState, AppStateInner};
+use rag_06::api::{AppState, AppStateInner, routes};
 use rag_06::config::AppConfig;
 use rag_06::generation::Generator;
 use rag_06::retrieval::Retriever;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let mode = std::env::args().nth(1).unwrap_or_else(|| "serve".to_string());
+    init("rag-06");
+
+    let mode = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "serve".to_string());
 
     match mode.as_str() {
         "demo" => run_demo().await?,
@@ -44,14 +49,25 @@ async fn run_server() -> Result<()> {
     let config = AppConfig::from_env();
 
     println!("=== 06-rag Naive RAG 服务 ===\n{}", config.summary());
+    info!(
+        bind_addr = %config.bind_addr,
+        model = %config.generation.model,
+        embedding_model = ?config.embedding_model,
+        top_k = config.retrieval.top_k,
+        min_score = ?config.retrieval.min_score,
+        "服务配置已加载"
+    );
 
     // 建索引或加载已有索引。
     println!("\n准备索引...");
+    let _stage = stage_guard("准备索引");
     let (store, stats, created) = rag_06::index::ensure_index(&config).await?;
     if created {
         println!("  ✓ 已新建索引: {}", stats.summary());
+        info!(stats = %stats.summary(), "索引已新建");
     } else {
         println!("  ✓ 已加载索引: {}", stats.summary());
+        info!(stats = %stats.summary(), "索引已加载");
     }
 
     // 装配核心组件。
@@ -87,6 +103,7 @@ async fn run_server() -> Result<()> {
 
     let addr = listener.local_addr()?;
     println!("\n服务已启动: http://{addr}\n");
+    info!(addr = %addr, "HTTP 服务已启动");
     println!("端点:");
     println!("  GET  /               服务信息 + 索引状态");
     println!("  GET  /health         健康检查");
@@ -140,7 +157,12 @@ async fn run_demo() -> Result<()> {
             println!("  [{}] {:.4}{}", chunk.rank + 1, chunk.score, head);
             println!(
                 "      {}",
-                chunk.text.chars().take(70).collect::<String>().replace('\n', " ")
+                chunk
+                    .text
+                    .chars()
+                    .take(70)
+                    .collect::<String>()
+                    .replace('\n', " ")
             );
         }
 
@@ -148,8 +170,17 @@ async fn run_demo() -> Result<()> {
         let prompt = rag_06::prompt::assemble(&retrieval, question);
 
         // 3. 生成。
-        let result = generator.generate_with_citations(&prompt, &retrieval).await?;
+        let result = generator
+            .generate_with_citations(&prompt, &retrieval)
+            .await?;
         println!("\n答: {}", result.answer);
+        info!(
+            question = %question,
+            retrieved = retrieval.chunks.len(),
+            citations = result.citations.len(),
+            total_tokens = result.usage.total_tokens,
+            "Demo 问答完成"
+        );
         println!(
             "\n引用: {} 条 | token: prompt={} completion={} total={}",
             result.citations.len(),
@@ -158,7 +189,12 @@ async fn run_demo() -> Result<()> {
             result.usage.total_tokens
         );
         for c in &result.citations {
-            println!("  [{}] {} · {}", c.index, c.chunk_id, c.heading_path.join(" > "));
+            println!(
+                "  [{}] {} · {}",
+                c.index,
+                c.chunk_id,
+                c.heading_path.join(" > ")
+            );
         }
     }
 

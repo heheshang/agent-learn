@@ -15,6 +15,7 @@
 //! 分开是因为它们的耗时差了两个数量级 ——
 //! 混在一起会让「调试时想快速看一眼」变得很痛苦。
 
+use agent_logging::{info, init, warn};
 use std::process::ExitCode;
 use std::sync::Arc;
 
@@ -48,6 +49,8 @@ enum Command {
 
 #[tokio::main]
 async fn main() -> ExitCode {
+    init("rag-12");
+
     let cli = match parse_args() {
         Ok(cli) => cli,
         Err(message) => {
@@ -63,6 +66,7 @@ async fn main() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("\n运行失败: {e}");
+            warn!(error = %e, "命令执行失败");
             ExitCode::FAILURE
         }
     }
@@ -151,6 +155,7 @@ async fn serve(config: AppConfig) -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(&config.bind_addr).await?;
 
     println!("✓ 服务已启动: http://{}", config.bind_addr);
+    info!(addr = %config.bind_addr, "HTTP 服务已启动");
     println!("  端点: /  /health  /api/search  /api/ask  /api/compare  /api/eval  /api/reindex");
     println!();
 
@@ -201,6 +206,7 @@ async fn demo(cli: Cli, config: AppConfig) -> anyhow::Result<()> {
     );
     if let Some(reason) = &outcome.retrieval.degrade_reason {
         println!("  ⚠ 降级: {reason}");
+        warn!(reason = %reason, "问答链路发生降级");
     }
     println!();
 
@@ -257,6 +263,7 @@ async fn compare(cli: Cli, config: AppConfig) -> anyhow::Result<()> {
                 );
                 if let Some(reason) = &outcome.degrade_reason {
                     println!("│  ⚠ 降级: {reason}");
+                    warn!(mode = mode.name(), reason = %reason, "消融档位发生降级");
                 }
 
                 for hit in &outcome.hits {

@@ -9,16 +9,18 @@
 
 前面 11 个项目各自解决了一个问题，但**它们从来没有被装进同一个进程**：
 
-| 项目 | 解决什么 | 局限 |
-|---|---|---|
-| 04-rag | 加载 + 分块 | 只有分块 |
-| 05-rag | 向量化 + 存储 | 存储是本地 FAISS 文件 |
-| 06-rag | Prompt + 生成 | 检索是纯向量 |
-| 07-query | 查询改写 | 改写完还是纯向量 |
-| 08-rag | 混合检索 + 重排 | 索引在**进程内**，数据一大就吃不消 |
-| 09-rag-eval | 怎么量化效果 | 评估的是 08 的水平 |
-| 10-rag-milvus | 生产向量库 | **只到检索为止**，没有重排、没有压缩 |
-| 11-rag-advance | 复杂文档解析 | 只到解析为止 |
+
+| 项目             | 解决什么        | 局限                   |
+| -------------- | ----------- | -------------------- |
+| 04-rag         | 加载 + 分块     | 只有分块                 |
+| 05-rag         | 向量化 + 存储    | 存储是本地 FAISS 文件       |
+| 06-rag         | Prompt + 生成 | 检索是纯向量               |
+| 07-query       | 查询改写        | 改写完还是纯向量             |
+| 08-rag         | 混合检索 + 重排   | 索引在**进程内**，数据一大就吃不消  |
+| 09-rag-eval    | 怎么量化效果      | 评估的是 08 的水平          |
+| 10-rag-milvus  | 生产向量库       | **只到检索为止**，没有重排、没有压缩 |
+| 11-rag-advance | 复杂文档解析      | 只到解析为止               |
+
 
 本项目做的是**集成 + 两处补强**：
 
@@ -33,11 +35,13 @@
 普通问答式 RAG 的输出和输入差不多长；摘要式任务的输出**远短于**输入。
 这带来一个反直觉的结论：**上下文越长，效果可能越差**。
 
-| 机制 | 后果 |
-|---|---|
-| 稀释 | 20 个块里只有 3 个相关，其余是噪声 |
-| 干扰 | 不相关片段会诱导模型去引用它们（幻觉） |
-| 成本 | 上下文 token 直接等于钱和延迟 |
+
+| 机制  | 后果                   |
+| --- | -------------------- |
+| 稀释  | 20 个块里只有 3 个相关，其余是噪声 |
+| 干扰  | 不相关片段会诱导模型去引用它们（幻觉）  |
+| 成本  | 上下文 token 直接等于钱和延迟   |
+
 
 所以本项目在「重排」之后加了一层**抽取式压缩**：按相关度累加 token 预算，
 超预算的片段按句子边界截断并标省略号。
@@ -46,6 +50,8 @@
 > **用一个可靠性问题换另一个**：你本来担心「上下文太长」，现在要担心
 > 「压缩时把关键信息压掉了」。而且压缩本身要调一次 LLM —— 多一次网络往返。
 > 抽取式只做「挑选 + 截断」，进入上下文的每一句都**逐字来自原始语料**。
+
+
 
 ### 补强二：消融阶梯
 
@@ -63,6 +69,8 @@ dense ──> keyword ──> hybrid ──> hybrid_rerank ──> full
 相邻两档的差值是**可归因**的 —— 这正是「消融实验」的意义。
 
 ---
+
+
 
 ## 快速开始
 
@@ -82,6 +90,8 @@ SUMMARY_EVAL_LIMIT=5 cargo run -p rag-12 -- eval
 # ⑤ 启动 HTTP 服务（127.0.0.1:3050）
 cargo run -p rag-12 -- serve
 ```
+
+
 
 ### 输出长什么样
 
@@ -136,6 +146,8 @@ cargo run -p rag-12 -- serve
 > 合成为一个值，客户端拿不到分项。详见「分数语义」一节。
 
 ---
+
+
 
 ## 架构全景
 
@@ -210,6 +222,10 @@ graph TB
     style Bootstrap fill:#f3e5f5
 ```
 
+
+
+
+
 ### 一次 `/api/ask` 的完整时序
 
 ```mermaid
@@ -246,6 +262,10 @@ sequenceDiagram
     H-->>C: 200 {answer, citations, compression, retrieval}
 ```
 
+
+
+
+
 ### 两层融合的算法流程
 
 ```mermaid
@@ -275,9 +295,13 @@ flowchart TB
     style L fill:#fff3e0
 ```
 
+
+
 > ① 是「**单问法内**的 dense ↔ BM25 融合」，② 是「**多个问法之间**的融合」。
 > 两层都用 RRF，但**排名口径不同**：① 是各路自己的名次，② 是每个问法内部的��次。
 > 混用会算出完全错误的分数（见「踩过的坑」）。
+
+
 
 ### 知识地图：12-rag-summary
 
@@ -360,6 +384,10 @@ graph LR
     Surface --> Pipe
 ```
 
+
+
+
+
 ### 复用了前 11 个项目的什么
 
 ```mermaid
@@ -395,6 +423,8 @@ graph LR
     style Prev fill:#eceff1
 ```
 
+
+
 > 原则：**能复用的绝不复写**。
 > `MilvusConfig` 直接 `pub use` 自 10，`Reranker` / `Bm25Index` 直接用 08 的，
 > 指标注册表直接用 09 的 —— 这样上游修了 bug，本项目自动受益。
@@ -402,7 +432,11 @@ graph LR
 
 ---
 
+
+
 ## 核心设计决策
+
+
 
 ### ① 为什么「关键词路」用客户端 BM25 而不是服务端 BM25
 
@@ -413,10 +447,12 @@ Milvus 的服务端 BM25 走的是**内置分析器**（英文优先的 `standar
 
 所以本项目**两条路都留**：
 
-| 路 | 优点 | 缺点 | 用途 |
-|---|---|---|---|
-| 服务端 BM25 | 一次 RPC，大规模可用 | 中文分词弱 | **生产主路径** |
-| 客户端 BM25 | 中文分词好，可控 | 索引在进程内 | **精确对照 + 降级路径** |
+
+| 路        | 优点           | 缺点     | 用途              |
+| -------- | ------------ | ------ | --------------- |
+| 服务端 BM25 | 一次 RPC，大规模可用 | 中文分词弱  | **生产主路径**       |
+| 客户端 BM25 | 中文分词好，可控     | 索引在进程内 | **精确对照 + 降级路径** |
+
 
 这不只是「两条路都实现」—— 它让「服务端 vs 客户端」这件事本身可被对比。
 
@@ -424,10 +460,12 @@ Milvus 的服务端 BM25 走的是**内置分析器**（英文优先的 `standar
 
 混合检索的两路分数**根本不可比**：
 
-| 路 | 分数来源 | 典型范围 |
-|---|---|---|
-| 稠密 | 余弦相似度 | 0.55 ~ 0.85 |
-| BM25 | 对数加权和 | 0 ~ 15+ |
+
+| 路    | 分数来源  | 典型范围        |
+| ---- | ----- | ----------- |
+| 稠密   | 余弦相似度 | 0.55 ~ 0.85 |
+| BM25 | 对数加权和 | 0 ~ 15+     |
+
 
 所以融合只能用 **RRF**（只看排名）：
 
@@ -437,12 +475,14 @@ score(d) = Σ  1 / (k + rank_i(d))        k = 60
 
 而**报告里的分数标注**必须诚实：
 
-| 路径 | `score` | `dense_score` | `bm25_score` |
-|---|---|---|---|
-| `dense_only` | 余弦相似度 | ✅ 同 score | `None` |
-| `keyword_only` | BM25 分 | `None` | ✅ 同 score |
-| `client_fusion` | RRF 融合分 | ✅ 该路稠密分 | ✅ 该路 BM25 分 |
-| `server_hybrid` | 服务端 RRF 分 | `None` | `None` |
+
+| 路径              | `score`   | `dense_score` | `bm25_score` |
+| --------------- | --------- | ------------- | ------------ |
+| `dense_only`    | 余弦相似度     | ✅ 同 score     | `None`       |
+| `keyword_only`  | BM25 分    | `None`        | ✅ 同 score    |
+| `client_fusion` | RRF 融合分   | ✅ 该路稠密分       | ✅ 该路 BM25 分  |
+| `server_hybrid` | 服务端 RRF 分 | `None`        | `None`       |
+
 
 > ⚠️ 服务端混合检索**不能**把分数标成 `dense` —— 服务端已经把两路合成为一个
 > RRF 分，客户端拿不到分项。硬标的话就会出现「dense=0.0164」这种
@@ -464,6 +504,8 @@ score(d) = Σ  1 / (k + rank_i(d))        k = 60
 - **按句子边界截断**，不按字符 —— 切到句子中间会产生「半句话」，是纯噪声
 - **加省略号标记** —— 不加的话模型可能把片段当成完整论述来引用（幻觉）
 - **压缩后重新编号** —— 否则模型会引用一个已经被砍掉的片段
+
+
 
 ### ④ 为什么检索层要抽成 `Retriever` trait
 
@@ -492,18 +534,22 @@ pub trait Retriever: Send + Sync + std::fmt::Debug {
 
 ---
 
+
+
 ## 降级链
 
 这个流水线**每一环都有降级路径**：
 
-| 环节失败 | 降级行为 | 会不会报错 |
-|---|---|---|
-| 多问法改写失败 | 退回原问题继续检索 | ❌ |
-| 服务端混合检索失败 | 退回客户端双路融合 | ❌ |
-| 客户端融合也失败 | 报错（没数据就没答案） | ✅ |
-| 重排失败 | 退回融合后的原始顺序 | ❌ |
-| 上下文压缩失败 | 退回未压缩的完整片段 | ❌ |
-| 生成失败 | 报错（检索结果仍随错误一起返回） | ✅ |
+
+| 环节失败      | 降级行为             | 会不会报错 |
+| --------- | ---------------- | ----- |
+| 多问法改写失败   | 退回原问题继续检索        | ❌     |
+| 服务端混合检索失败 | 退回客户端双路融合        | ❌     |
+| 客户端融合也失败  | 报错（没数据就没答案）      | ✅     |
+| 重排失败      | 退回融合后的原始顺序       | ❌     |
+| 上下文压缩失败   | 退回未压缩的完整片段       | ❌     |
+| 生成失败      | 报错（检索结果仍随错误一起返回） | ✅     |
+
 
 降级发生时，响应里的 `degrade_reason` 会说清楚**降了什么、为什么**：
 
@@ -519,7 +565,11 @@ pub trait Retriever: Send + Sync + std::fmt::Debug {
 
 ---
 
+
+
 ## 踩过的坑
+
+
 
 ### ① 服务端混合检索的分数不能拆成 dense / bm25
 
@@ -543,6 +593,8 @@ let expected = 2.0 / 61.0;
 assert!((fused[0].score - expected).abs() < 1e-6);
 ```
 
+
+
 ### ③ 客户端 BM25 必须用 `text` 而不是 `embedded_text`
 
 向量索引用 `embedded_text`（含标题路径前缀）—— 标题能帮语义检索。
@@ -564,6 +616,8 @@ fn bm25_index_covers_the_same_chunks_as_the_chunk_index() {
 }
 ```
 
+
+
 ### ⑤ Milvus 的 `ConsistencyLevel` 必须用 `Strong`
 
 用 `Bounded` 会被 SDK 映射成字面时间戳 `2`，读到的是远古快照 ——
@@ -578,21 +632,25 @@ fn bm25_index_covers_the_same_chunks_as_the_chunk_index() {
 
 ---
 
+
+
 ## HTTP API
 
 ```bash
 cargo run -p rag-12 -- serve   # 127.0.0.1:3050
 ```
 
-| 方法 | 路径 | 说明 |
-|---|---|---|
-| GET  | `/` | 服务信息 + 配置 + 索引状态 |
-| GET  | `/health` | 健康检查（含 Milvus 连通性） |
-| POST | `/api/search` | **纯检索**（不生成） |
-| POST | `/api/ask` | **完整问答**（检索 → 重排 → 压缩 → 生成） |
-| POST | `/api/compare` | **同题消融对照** ★ |
-| POST | `/api/eval` | **跑评估集**（产出报告） |
-| POST | `/api/reindex` | 重建索引 |
+
+| 方法   | 路径             | 说明                          |
+| ---- | -------------- | --------------------------- |
+| GET  | `/`            | 服务信息 + 配置 + 索引状态            |
+| GET  | `/health`      | 健康检查（含 Milvus 连通性）          |
+| POST | `/api/search`  | **纯检索**（不生成）                |
+| POST | `/api/ask`     | **完整问答**（检索 → 重排 → 压缩 → 生成） |
+| POST | `/api/compare` | **同题消融对照** ★                |
+| POST | `/api/eval`    | **跑评估集**（产出报告）              |
+| POST | `/api/reindex` | 重建索引                        |
+
 
 ```bash
 # 问答
@@ -611,70 +669,113 @@ curl -s http://127.0.0.1:3050/api/eval \
   -d '{"limit":5}' | jq '.reports[] | {variant, failed}'
 ```
 
+
+
 ### 统一错误响应
 
 ```json
 { "error": "Bad Request", "message": "请求参数不合法: 问题不能为空" }
 ```
 
-| 错误 | HTTP | 含义 |
-|---|---|---|
-| `BadRequest` | 400 | 请求参数不合法（含 JSON 解析失败） |
-| `NotReady` | 503 | 索引未就绪 / Milvus 不可达 |
-| `Retrieval` | 500 | 检索失败 |
-| `Rerank` | 502 | 重排失败 |
-| `Generation` | 502 | LLM 调用失败 |
-| `Internal` | 500 | 内部错误 |
+
+| 错误           | HTTP | 含义                   |
+| ------------ | ---- | -------------------- |
+| `BadRequest` | 400  | 请求参数不合法（含 JSON 解析失败） |
+| `NotReady`   | 503  | 索引未就绪 / Milvus 不可达   |
+| `Retrieval`  | 500  | 检索失败                 |
+| `Rerank`     | 502  | 重排失败                 |
+| `Generation` | 502  | LLM 调用失败             |
+| `Internal`   | 500  | 内部错误                 |
+
 
 > JSON 解析失败也归到 `BadRequest`（400），而不是 422 ——
 > 「请求体不是合法 JSON」和「参数值不合法」是同一类用户错误。
 
 ---
 
+
+
 ## 配置
 
 所有环境变量前缀 `SUMMARY_`（和 04~11 都不撞）。
 
-| 变量 | 说明 | 默认 |
+
+| 变量                            | 说明                                 | 默认                                 |
+| ----------------------------- | ---------------------------------- | ---------------------------------- |
+| `SUMMARY_DATA_DIR`            | 知识库目录                              | `12-rag-summary/data`              |
+| `SUMMARY_EVAL_DATASET`        | 评估集路径                              | `09-rag-eval/data/eval_cases.json` |
+| `SUMMARY_BIND_ADDR`           | 监听地址                               | `127.0.0.1:3050`                   |
+| `SUMMARY_MODE`                | 默认检索模式                             | `full`                             |
+| `SUMMARY_TOP_K`               | 最终块数                               | `5`                                |
+| `SUMMARY_PER_PATH_K`          | 每路召回数                              | `20`                               |
+| `SUMMARY_MIN_SCORE`           | 相似度下限（只对 dense / client_fusion 生效） | 空                                  |
+| `SUMMARY_RERANK_ENABLED`      | 是否启用重排                             | `true`                             |
+| `SUMMARY_RERANK_BACKEND`      | `local` / `cohere`                 | `local`                            |
+| `SUMMARY_RERANK_MODEL`        | `bge` / `m3` / `jina`              | `bge`                              |
+| `SUMMARY_RERANK_CANDIDATE_K`  | 送进重排的候选数                           | `20`                               |
+| `SUMMARY_RERANK_TOP_N`        | 重排后保留条数                            | `5`                                |
+| `COHERE_API_KEY`              | Cohere API key                     | 空                                  |
+| `SUMMARY_COMPRESS_ENABLED`    | 是否启用上下文压缩                          | `true`                             |
+| `SUMMARY_COMPRESS_BUDGET`     | 上下文 token 预算                       | `1200`                             |
+| `SUMMARY_REWRITE_ENABLED`     | 是否启用多问法改写                          | `true`                             |
+| `SUMMARY_REWRITE_NUM_QUERIES` | 问法数量                               | `3`                                |
+| `SUMMARY_MODEL`               | 生成模型                               | `deepseek-flash`                   |
+| `SUMMARY_TEMPERATURE`         | 生成温度                               | `0.1`                              |
+| `SUMMARY_MAX_TOKENS`          | 生成 max tokens                      | `2000`                             |
+| `SUMMARY_EVAL_LIMIT`          | 评估时每个变体的样本数上限                      | 空（全量）                              |
+| `SUMMARY_AUTO_INDEX`          | 启动时自动建索引                           | `true`                             |
+| `SUMMARY_MILVUS_URI`          | Milvus gRPC 地址                     | `http://127.0.0.1:19530`           |
+| `SUMMARY_MILVUS_TOKEN`        | Milvus 认证 token                    | `root:Milvus`                      |
+| `SUMMARY_MILVUS_COLLECTION`   | collection 名                       | `rag_summary_chunks`               |
+| `SUMMARY_MILVUS_ENABLE_BM25`  | 是否启用服务端 BM25                       | `true`                             |
+
+---
+
+## 日志
+
+全仓库统一走 `00-logging`（`agent-logging`）。
+
+```bash
+RUST_LOG=info cargo run -p rag-12 -- compare "问题"
+RUST_LOG=debug,rag_12=trace cargo run -p rag-12 -- demo "问题"
+```
+
+| 事件 | 级别 | 关键字段 |
 |---|---|---|
-| `SUMMARY_DATA_DIR` | 知识库目录 | `12-rag-summary/data` |
-| `SUMMARY_EVAL_DATASET` | 评估集路径 | `09-rag-eval/data/eval_cases.json` |
-| `SUMMARY_BIND_ADDR` | 监听地址 | `127.0.0.1:3050` |
-| `SUMMARY_MODE` | 默认检索模式 | `full` |
-| `SUMMARY_TOP_K` | 最终块数 | `5` |
-| `SUMMARY_PER_PATH_K` | 每路召回数 | `20` |
-| `SUMMARY_MIN_SCORE` | 相似度下限（只对 dense / client_fusion 生效） | 空 |
-| `SUMMARY_RERANK_ENABLED` | 是否启用重排 | `true` |
-| `SUMMARY_RERANK_BACKEND` | `local` / `cohere` | `local` |
-| `SUMMARY_RERANK_MODEL` | `bge` / `m3` / `jina` | `bge` |
-| `SUMMARY_RERANK_CANDIDATE_K` | 送进重排的候选数 | `20` |
-| `SUMMARY_RERANK_TOP_N` | 重排后保留条数 | `5` |
-| `COHERE_API_KEY` | Cohere API key | 空 |
-| `SUMMARY_COMPRESS_ENABLED` | 是否启用上下文压缩 | `true` |
-| `SUMMARY_COMPRESS_BUDGET` | 上下文 token 预算 | `1200` |
-| `SUMMARY_REWRITE_ENABLED` | 是否启用多问法改写 | `true` |
-| `SUMMARY_REWRITE_NUM_QUERIES` | 问法数量 | `3` |
-| `SUMMARY_MODEL` | 生成模型 | `deepseek-flash` |
-| `SUMMARY_TEMPERATURE` | 生成温度 | `0.1` |
-| `SUMMARY_MAX_TOKENS` | 生成 max tokens | `2000` |
-| `SUMMARY_EVAL_LIMIT` | 评估时每个变体的样本数上限 | 空（全量） |
-| `SUMMARY_AUTO_INDEX` | 启动时自动建索引 | `true` |
-| `SUMMARY_MILVUS_URI` | Milvus gRPC 地址 | `http://127.0.0.1:19530` |
-| `SUMMARY_MILVUS_TOKEN` | Milvus 认证 token | `root:Milvus` |
-| `SUMMARY_MILVUS_COLLECTION` | collection 名 | `rag_summary_chunks` |
-| `SUMMARY_MILVUS_ENABLE_BM25` | 是否启用服务端 BM25 | `true` |
+| 流水线装配 | `INFO`（`stage_guard`） | 阶段耗时 |
+| 索引就绪 | `INFO` | `collection` / `chunks` / `server_count` / `bm25_docs` |
+| 混合检索完成 | `DEBUG` | `mode` / `query_count` / `candidate_pool` / `fused` / `retrieve_ms` |
+| 各检索路径（dense / keyword / server_hybrid / client_fusion） | `DEBUG` | `path` / `hit_count` |
+| 服务端混合失败 → 降级到客户端融合 | `WARN` | `error` |
+| 查询改写完成 / 改写失败降级 | `DEBUG` / `WARN` | `query_count` / `error` |
+| 重排完成 / 重排失败降级 | `DEBUG` / `WARN` | `hit_count` / `error` |
+| 上下文压缩 | `DEBUG` | `budget` / `tokens_before` / `tokens_after` / `dropped` / `truncated` |
+| 检索链路发生降级（汇总） | `WARN` | `mode` / `reason` |
+| 问答完成 | `INFO` | `mode` / `citations` / `elapsed_ms` |
+| 消融变体评估完成 | `INFO` | `variant` / `case_count` / `failed` |
+
+HTTP 层用 `agent_logging::trace_layer()`，每个请求带 `request_id` / `method` /
+`path` / `status` / `elapsed_ms`。
+
+---
+
+
 
 ### 检索模式
 
-| 模式 | 稠密 | 关键词 | 融合 | 重排 | 改写 | 压缩 |
-|---|---|---|---|---|---|---|
-| `dense` | Milvus | — | — | — | — | — |
-| `keyword` | — | 客户端 BM25 | — | — | — | — |
-| `hybrid` | Milvus | 服务端 BM25 | 服务端 RRF | — | — | — |
-| `hybrid_rerank` | Milvus | 服务端 BM25 | 服务端 RRF | ✅ | — | — |
-| `full` | Milvus | 服务端 BM25 | 服务端 RRF | ✅ | ✅ | ✅ |
+
+| 模式              | 稠密     | 关键词      | 融合      | 重排  | 改写  | 压缩  |
+| --------------- | ------ | -------- | ------- | --- | --- | --- |
+| `dense`         | Milvus | —        | —       | —   | —   | —   |
+| `keyword`       | —      | 客户端 BM25 | —       | —   | —   | —   |
+| `hybrid`        | Milvus | 服务端 BM25 | 服务端 RRF | —   | —   | —   |
+| `hybrid_rerank` | Milvus | 服务端 BM25 | 服务端 RRF | ✅   | —   | —   |
+| `full`          | Milvus | 服务端 BM25 | 服务端 RRF | ✅   | ✅   | ✅   |
+
 
 ---
+
+
 
 ## 目录结构
 
@@ -707,6 +808,8 @@ curl -s http://127.0.0.1:3050/api/eval \
 
 ---
 
+
+
 ## 测试
 
 ```bash
@@ -718,6 +821,8 @@ RAG12_REQUIRE_BACKEND=1 cargo test -p rag-12   # 强制要求 Milvus 可达
 test result: ok. 53 passed   # 单元测试
 test result: ok. 22 passed   # 集成测试（含 3 个在线 Milvus 测试）
 ```
+
+
 
 ### 测试策略
 
@@ -741,25 +846,31 @@ test result: ok. 22 passed   # 集成测试（含 3 个在线 Milvus 测试）
 
 ---
 
+
+
 ## 技术参考速查
 
-| 主题 | 关键点 | 来源 |
-|---|---|---|
-| RRF | `score(d) = Σ 1/(k + rank_i(d))`，k = 60 | Cormack et al. 2009 |
-| BM25 | `IDF = ln(1 + (N-df+0.5)/(df+0.5))`，`k1 = 1.2`，`b = 0.75` | Robertson & Zaragoza 2009 |
-| 词频饱和 | 第 11 次出现的信息量远小于第 1 次 | 同上 |
-| 双编码器 | query / doc 独立编码，比对向量距离 | Reimers & Gurevych 2020 |
-| 交叉编码器 | query + doc 拼接后联合推理，能看细粒度交互 | Cross-Encoder (Nogueira & Cho 2019) |
-| 两阶段检索 | 召回 20~50 条 → 精排 3~5 条 | 工业界通用实践 |
-| Milvus 服务端混合 | `hybrid_search` + `RRFRerank` + `EmbeddedText` | Milvus 官方文档 |
-| Milvus BM25 | 服务端函数 `FunctionType::Bm25`，输入 text 输出 sparse | Milvus 官方文档 |
-| 稀疏倒排索引 | `IndexType::SparseInvertedIndex` + `MetricType::Bm25` | Milvus 官方文档 |
-| 一致性级别 | 必须 `Strong`；`Bounded` 会被 SDK 映射成时间戳 2 | Milvus SDK 源码 |
-| 上下文压缩 | 抽取式保留原句可溯源；生成式会丢信息 | 本项目设计决策 |
-| 丢失在中间 | 长上下文中间位置的内容更易被忽略 | Liu et al. 2023 |
-| 消融实验 | 每次只加一个增强，差值才可归因 | 通用实验方法 |
+
+| 主题           | 关键点                                                       | 来源                                  |
+| ------------ | --------------------------------------------------------- | ----------------------------------- |
+| RRF          | `score(d) = Σ 1/(k + rank_i(d))`，k = 60                   | Cormack et al. 2009                 |
+| BM25         | `IDF = ln(1 + (N-df+0.5)/(df+0.5))`，`k1 = 1.2`，`b = 0.75` | Robertson & Zaragoza 2009           |
+| 词频饱和         | 第 11 次出现的信息量远小于第 1 次                                      | 同上                                  |
+| 双编码器         | query / doc 独立编码，比对向量距离                                   | Reimers & Gurevych 2020             |
+| 交叉编码器        | query + doc 拼接后联合推理，能看细粒度交互                               | Cross-Encoder (Nogueira & Cho 2019) |
+| 两阶段检索        | 召回 20~50 条 → 精排 3~5 条                                     | 工业界通用实践                             |
+| Milvus 服务端混合 | `hybrid_search` + `RRFRerank` + `EmbeddedText`            | Milvus 官方文档                         |
+| Milvus BM25  | 服务端函数 `FunctionType::Bm25`，输入 text 输出 sparse              | Milvus 官方文档                         |
+| 稀疏倒排索引       | `IndexType::SparseInvertedIndex` + `MetricType::Bm25`     | Milvus 官方文档                         |
+| 一致性级别        | 必须 `Strong`；`Bounded` 会被 SDK 映射成时间戳 2                     | Milvus SDK 源码                       |
+| 上下文压缩        | 抽取式保留原句可溯源；生成式会丢信息                                        | 本项目设计决策                             |
+| 丢失在中间        | 长上下文中间位置的内容更易被忽略                                          | Liu et al. 2023                     |
+| 消融实验         | 每次只加一个增强，差值才可归因                                           | 通用实验方法                              |
+
 
 ---
+
+
 
 ## 与前面项目的关系
 
@@ -793,6 +904,8 @@ graph LR
     style Integration fill:#e8f5e9
 ```
 
+
+
 **下一步的自然延伸**：11-rag-advance 负责「把复杂文档变成规整 Markdown」，
 12-rag-summary 负责「把规整 Markdown 变成有据可依的摘要」。
 两者接起来就是**完整的生产链路**：
@@ -800,3 +913,4 @@ graph LR
 ```text
 PDF / Word / HTML ──11──> 规整 Markdown ──12──> 带引用的摘要
 ```
+

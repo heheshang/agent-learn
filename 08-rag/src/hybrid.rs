@@ -46,6 +46,7 @@
 //! 有了两个对照组，才能量化「混合到底值多少」——
 //! 这和 07-query 里 `Strategy::None` 的作用完全一样。
 
+use agent_logging::{debug, info, warn};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -255,10 +256,19 @@ impl HybridRetriever {
     ) -> RagResult<Vec<HybridHit>> {
         let query = query.trim();
         if query.is_empty() {
+            warn!("混合检索查询为空");
             return Err(RagError::BadRequest("查询不能为空".to_string()));
         }
 
         let per_path_k = per_path_k.unwrap_or(self.per_path_k).max(1);
+
+        debug!(
+            query = %query,
+            mode = mode.name(),
+            top_k,
+            per_path_k,
+            "开始混合检索"
+        );
 
         match mode {
             SearchMode::Vector => {
@@ -279,7 +289,15 @@ impl HybridRetriever {
 
                 let vector_hits = self.search_vector(query, per_path_k).await?;
 
-                Ok(finish(vector_hits, bm25_hits, top_k))
+                let result = finish(vector_hits, bm25_hits, top_k);
+                info!(
+                    query = %query,
+                    mode = mode.name(),
+                    hit_count = result.len(),
+                    consensus_count = result.iter().filter(|h| h.votes == 2).count(),
+                    "混合检索完成"
+                );
+                Ok(result)
             }
         }
     }
@@ -323,11 +341,7 @@ impl HybridRetriever {
 ///
 /// RRF 分数相同时，按 `max(vector_score, bm25_score)` 降序，
 /// 再按 ID 升序 —— 保证结果**可复现**，不依赖 HashMap 的迭代顺序。
-fn finish(
-    vector_hits: Vec<SearchHit>,
-    bm25_hits: Vec<Bm25Hit>,
-    top_k: usize,
-) -> Vec<HybridHit> {
+fn finish(vector_hits: Vec<SearchHit>, bm25_hits: Vec<Bm25Hit>, top_k: usize) -> Vec<HybridHit> {
     // key = 块 ID，value = 累加器。
     let mut acc: HashMap<String, HybridHit> = HashMap::new();
 
@@ -380,8 +394,14 @@ fn finish(
             .partial_cmp(&a.score)
             .unwrap_or(std::cmp::Ordering::Equal)
             .then_with(|| {
-                let a_best = a.vector_score.unwrap_or(0.0).max(a.bm25_score.unwrap_or(0.0));
-                let b_best = b.vector_score.unwrap_or(0.0).max(b.bm25_score.unwrap_or(0.0));
+                let a_best = a
+                    .vector_score
+                    .unwrap_or(0.0)
+                    .max(a.bm25_score.unwrap_or(0.0));
+                let b_best = b
+                    .vector_score
+                    .unwrap_or(0.0)
+                    .max(b.bm25_score.unwrap_or(0.0));
                 b_best
                     .partial_cmp(&a_best)
                     .unwrap_or(std::cmp::Ordering::Equal)
@@ -423,7 +443,11 @@ mod tests {
 
     #[test]
     fn dedupes_across_paths() {
-        let hits = finish(vec![vhit("a", 0.9), vhit("b", 0.8)], vec![bhit("a", 5.0)], 10);
+        let hits = finish(
+            vec![vhit("a", 0.9), vhit("b", 0.8)],
+            vec![bhit("a", 5.0)],
+            10,
+        );
 
         assert_eq!(hits.len(), 2, "同一个 ID 只能占一个位置");
         let a = hits.iter().find(|h| h.id == "a").unwrap();
@@ -436,7 +460,11 @@ mod tests {
     fn rewards_consensus() {
         // 「a」两路都命中，「x」只在向量路排第一。
         // RRF 下共识的「a」应该排前面。
-        let hits = finish(vec![vhit("x", 0.9), vhit("a", 0.8)], vec![bhit("a", 5.0)], 10);
+        let hits = finish(
+            vec![vhit("x", 0.9), vhit("a", 0.8)],
+            vec![bhit("a", 5.0)],
+            10,
+        );
 
         assert_eq!(hits[0].id, "a");
         assert_eq!(hits[0].votes, 2);
@@ -469,8 +497,16 @@ mod tests {
 
     #[test]
     fn fusion_is_deterministic() {
-        let first = finish(vec![vhit("a", 0.9), vhit("b", 0.8)], vec![bhit("c", 3.0)], 10);
-        let second = finish(vec![vhit("a", 0.9), vhit("b", 0.8)], vec![bhit("c", 3.0)], 10);
+        let first = finish(
+            vec![vhit("a", 0.9), vhit("b", 0.8)],
+            vec![bhit("c", 3.0)],
+            10,
+        );
+        let second = finish(
+            vec![vhit("a", 0.9), vhit("b", 0.8)],
+            vec![bhit("c", 3.0)],
+            10,
+        );
 
         let ids1: Vec<&str> = first.iter().map(|h| h.id.as_str()).collect();
         let ids2: Vec<&str> = second.iter().map(|h| h.id.as_str()).collect();

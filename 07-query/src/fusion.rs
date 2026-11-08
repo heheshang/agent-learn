@@ -53,6 +53,7 @@
 //!
 //! 本项目两个都实现，可以用 `/api/compare` 对比。
 
+use agent_logging::debug;
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
@@ -101,7 +102,11 @@ impl FusionMethod {
 
     /// 所有方法。
     pub fn all() -> Vec<Self> {
-        vec![FusionMethod::Rrf, FusionMethod::MaxScore, FusionMethod::Concat]
+        vec![
+            FusionMethod::Rrf,
+            FusionMethod::MaxScore,
+            FusionMethod::Concat,
+        ]
     }
 }
 
@@ -221,11 +226,21 @@ impl FusedHit {
 /// - `method`：融合方法
 /// - `top_k`：最终保留多少条
 pub fn fuse(runs: &[RankedRun], method: FusionMethod, top_k: usize) -> Vec<FusedHit> {
-    match method {
+    let hits = match method {
         FusionMethod::Rrf => fuse_rrf(runs, top_k),
         FusionMethod::MaxScore => fuse_max_score(runs, top_k),
         FusionMethod::Concat => fuse_concat(runs, top_k),
-    }
+    };
+
+    debug!(
+        method = method.name(),
+        run_count = runs.len(),
+        hit_count = hits.len(),
+        top_k,
+        "融合完成"
+    );
+
+    hits
 }
 
 /// RRF 融合。
@@ -249,15 +264,17 @@ fn fuse_rrf(runs: &[RankedRun], top_k: usize) -> Vec<FusedHit> {
             let rank = idx + 1;
             let contribution = 1.0 / (RRF_K + rank as f32);
 
-            let entry = acc.entry(chunk.id.clone()).or_insert_with(|| HitAccumulator {
-                source: chunk.source.clone(),
-                heading_path: chunk.heading_path.clone(),
-                text: chunk.text.clone(),
-                best_score: f32::NEG_INFINITY,
-                fused_score: 0.0,
-                votes: 0,
-                matched_queries: Vec::new(),
-            });
+            let entry = acc
+                .entry(chunk.id.clone())
+                .or_insert_with(|| HitAccumulator {
+                    source: chunk.source.clone(),
+                    heading_path: chunk.heading_path.clone(),
+                    text: chunk.text.clone(),
+                    best_score: f32::NEG_INFINITY,
+                    fused_score: 0.0,
+                    votes: 0,
+                    matched_queries: Vec::new(),
+                });
 
             entry.fused_score += contribution;
             entry.votes += 1;
@@ -314,15 +331,17 @@ fn fuse_max_score(runs: &[RankedRun], top_k: usize) -> Vec<FusedHit> {
 
     for run in runs {
         for chunk in &run.chunks {
-            let entry = acc.entry(chunk.id.clone()).or_insert_with(|| HitAccumulator {
-                source: chunk.source.clone(),
-                heading_path: chunk.heading_path.clone(),
-                text: chunk.text.clone(),
-                best_score: f32::NEG_INFINITY,
-                fused_score: 0.0,
-                votes: 0,
-                matched_queries: Vec::new(),
-            });
+            let entry = acc
+                .entry(chunk.id.clone())
+                .or_insert_with(|| HitAccumulator {
+                    source: chunk.source.clone(),
+                    heading_path: chunk.heading_path.clone(),
+                    text: chunk.text.clone(),
+                    best_score: f32::NEG_INFINITY,
+                    fused_score: 0.0,
+                    votes: 0,
+                    matched_queries: Vec::new(),
+                });
 
             entry.best_score = entry.best_score.max(chunk.score);
             entry.fused_score = entry.best_score;
@@ -445,9 +464,7 @@ mod tests {
         RankedRun::new(
             query,
             Strategy::MultiQuery,
-            ids.iter()
-                .map(|(id, s)| chunk(id, *s))
-                .collect(),
+            ids.iter().map(|(id, s)| chunk(id, *s)).collect(),
         )
     }
 
@@ -479,10 +496,7 @@ mod tests {
 
     #[test]
     fn rrf_records_matched_queries() {
-        let runs = vec![
-            run("查询一", &[("a", 0.9)]),
-            run("查询二", &[("a", 0.8)]),
-        ];
+        let runs = vec![run("查询一", &[("a", 0.9)]), run("查询二", &[("a", 0.8)])];
 
         let fused = fuse(&runs, FusionMethod::Rrf, 10);
         assert_eq!(fused[0].matched_queries.len(), 2);

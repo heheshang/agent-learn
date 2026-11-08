@@ -202,57 +202,218 @@ graph TB
     style S5 fill:#e8f5e9
 ```
 
-### 思维导图：查询改写的知识地图
+### 知识地图：查询改写
+
+```mermaid
+graph LR
+    N1(("07-query<br/>查询改写"))
+    subgraph N2["为什么需要"]
+        N3["人话 ≠ 文档语言"]
+        N2 --> N3
+        N4["向量对不上"]
+        N2 --> N4
+        N5["文体不对齐"]
+        N2 --> N5
+    end
+    N1 --> N2
+    subgraph N6["四种策略"]
+        subgraph N7["HyDE"]
+            N8["假想答案文档"]
+            N7 --> N8
+            N9["passage 方式嵌入"]
+            N7 --> N9
+            N10["适合概念性提问"]
+            N7 --> N10
+        end
+        N6 --> N7
+        subgraph N11["Multi-Query"]
+            N12["N 个等价问法"]
+            N11 --> N12
+            N13["各检一次再融合"]
+            N11 --> N13
+            N14["默认策略"]
+            N11 --> N14
+        end
+        N6 --> N11
+        subgraph N15["Rewrite"]
+            N16["口语 到 紧凑检索式"]
+            N15 --> N16
+            N17["单条"]
+            N15 --> N17
+        end
+        N6 --> N15
+        subgraph N18["Decompose"]
+            N19["复合问题拆子问题"]
+            N18 --> N19
+            N20["子问题上限"]
+            N18 --> N20
+        end
+        N6 --> N18
+        N21["None 对照组"]
+        N6 --> N21
+    end
+    N1 --> N6
+    subgraph N22["融合"]
+        subgraph N23["RRF 默认"]
+            N24["只看排名"]
+            N23 --> N24
+            N25["k = 60"]
+            N23 --> N25
+        end
+        N22 --> N23
+        N26["MaxScore"]
+        N22 --> N26
+        N27["Concat 基线"]
+        N22 --> N27
+    end
+    N1 --> N22
+    subgraph N28["提示词"]
+        N29["改写质量的天花板"]
+        N28 --> N29
+        N30["低温度"]
+        N28 --> N30
+        N31["四个专用提示词"]
+        N28 --> N31
+    end
+    N1 --> N28
+    subgraph N32["输出解析"]
+        N33["去编号"]
+        N32 --> N33
+        N34["markdown 加粗 vs 列表"]
+        N32 --> N34
+        N35["容错回退"]
+        N32 --> N35
+    end
+    N1 --> N32
+    subgraph N36["降级链"]
+        N37["改写失败 到 原问题"]
+        N36 --> N37
+        N38["纯增强 不能是单点故障"]
+        N36 --> N38
+    end
+    N1 --> N36
+    subgraph N39["实现细节"]
+        N40["嵌入放 spawn_blocking"]
+        N39 --> N40
+        N41["嵌入并发 FAISS 串行"]
+        N39 --> N41
+        N42["trait 必须 dyn 兼容"]
+        N39 --> N42
+        N43["转换器复用注入的 LLM"]
+        N39 --> N43
+    end
+    N1 --> N39
+    subgraph N44["核心认知"]
+        N45["改写是中间的翻译层"]
+        N44 --> N45
+        N46["收益要用对比矩阵量化"]
+        N44 --> N46
+    end
+    N1 --> N44
+```
+
+---
+
+## 思维导图：查询改写体系
 
 ```mermaid
 mindmap
-  root((07-query<br/>查询改写))
-    为什么需要
-      人话 ≠ 文档语言
-      向量对不上
-      文体不对齐
-    四种策略
-      HyDE
-        假想答案文档
-        passage 方式嵌入
-        适合概念性提问
-      Multi-Query
-        N 个等价问法
-        各检一次再融合
-        默认策略
-      Rewrite
-        口语 到 紧凑检索式
-        单条
-      Decompose
-        复合问题拆子问题
-        子问题上限
-      None 对照组
-    融合
-      RRF 默认
-        只看排名
-        k = 60
-      MaxScore
-      Concat 基线
-    提示词
-      改写质量的天花板
-      低温度
-      四个专用提示词
-    输出解析
-      去编号
-      markdown 加粗 vs 列表
-      容错回退
-    降级链
-      改写失败 到 原问题
-      纯增强 不能是单点故障
-    实现细节
-      嵌入放 spawn_blocking
-      嵌入并发 FAISS 串行
-      trait 必须 dyn 兼容
-      转换器复用注入的 LLM
+  root((07-query))
+    改写层 transform
+      QueryTransformer trait
+        strategy
+        transform N条检索式
+      四种策略
+        HyDE 假想文档
+        MultiQuery 多角度
+        Rewrite 精简改写
+        Decompose 拆子问题
+      输出解析
+        剥编号前缀
+        剥项目符号
+        剥代码块
+        去空行
+      降级链
+        LLM失败 回落原问题
+        始终至少返回一条
+    融合层 fusion
+      FusionMethod
+        RRF 倒数排名 默认
+        MaxScore 最高分
+        Concat 拼接 对照基线
+      RRF_K 60
+      votes 共识度
+      best_score 原始最高分
+      稳定次级排序
+    检索层 retrieval
+      多路并发检索
+      top_k 截断
+    编排层 pipeline
+      transform 到 retrieve
+      到 fuse 到 generate
+      降级链
+    LLM 抽象 llm.rs
+      Llm trait
+      GenaiLlm
+      ScriptedLlm 测试替身
+      disable_reasoning
     核心认知
-      改写是中间的翻译层
-      收益要用对比矩阵量化
+      改写是翻译层不是搜索
+      分数不可比 排名可比
+      融合奖励共识
+      改写必须是纯增强
+      提示词决定改写天花板
 ```
+
+---
+
+## 查询改写的完整链路
+
+```mermaid
+flowchart TB
+    Q["用户问题<br/>「怎么把向量存起来」"] --> TR{"QueryTransformer"}
+
+    TR -->|HyDE| H["让模型先写一段<br/>假想答案文档"]
+    TR -->|MultiQuery| M["让模型从多个角度<br/>生成 N 条查询"]
+    TR -->|Rewrite| RW["让模型精简改写成<br/>检索友好的关键词"]
+    TR -->|Decompose| D["让模型拆成<br/>多个子问题"]
+
+    H --> PARSE["输出解析<br/>剥编号/项目符号/代码块<br/>去空行"]
+    M --> PARSE
+    RW --> PARSE
+    D --> PARSE
+
+    PARSE --> CHECK{"至少一条?"}
+    CHECK -->|否| FALL["降级：回落原问题<br/>★ 改写必须是纯增强"]
+    CHECK -->|是| RUNS["N 路检索<br/>并发跑"]
+
+    RUNS --> FUSE{"FusionMethod"}
+    FUSE -->|RRF| RR["score = Σ 1/(60+rank)<br/>只看排名不看分数"]
+    FUSE -->|MaxScore| MS["score = max_i score_i"]
+    FUSE -->|Concat| CC["按路顺序拼接<br/>对照组"]
+    RR --> CTX
+    MS --> CTX
+    CC --> CTX
+    FALL --> RUNS
+
+    CTX["上下文 + votes 共识度"] --> GEN["LLM 生成答案"]
+
+    style FALL fill:#ffebee
+    style RR fill:#e8f5e9
+    style GEN fill:#fff3e0
+```
+
+### RRF 为什么必须存在
+
+```text
+路径            分数来源       分数范围
+原问题          余弦相似度     0.62 ~ 0.78
+HyDE 假想文档   余弦相似度     0.55 ~ 0.83
+Multi-Query     余弦相似度     0.60 ~ 0.75
+```
+
+**你不能直接把 0.78 和 0.55 比大小** —— 但「排第 1」和「排第 20」是可以比的。
+RRF 只用排名，天然免疫分数不可比的问题。
 
 ---
 
@@ -568,6 +729,27 @@ curl -s localhost:3010/api/compare -H 'Content-Type: application/json' -d '{
 | `QUERY_TEMPERATURE` | 生成温度 | `0.1` |
 | `QUERY_MAX_TOKENS` | 生成 max tokens | `2000` |
 
+---
+
+## 日志
+
+全仓库统一走 `00-logging`（`agent-logging`）。
+
+```bash
+RUST_LOG=info cargo run -p rag-07 -- compare "问题"
+RUST_LOG=debug,rag_07=trace cargo run -p rag-07 -- demo "问题"
+```
+
+| 事件 | 级别 | 关键字段 |
+|---|---|---|
+| 改写完成（HyDE / Multi-Query / Rewrite / Decompose） | `DEBUG` | `strategy` / `query_count` |
+| 改写失败 → 降级为原问题 | `WARN` | `error` |
+| 各路检索 | `DEBUG` | `strategy` / `hit_count` |
+| RRF / MaxScore 融合 | `DEBUG` | `input_count` / `output_count` / `method` |
+| 生成完成 | `INFO` | `strategy` / `citation_count` / `elapsed_ms` |
+
+HTTP 层用 `agent_logging::trace_layer()`。
+
 ### 为什么 `per_query_k` 默认是 `top_k × 2`
 
 多路检索 + 融合后，真正有用的块可能来自任何一路。
@@ -648,6 +830,157 @@ async fn      →  fn f() -> Pin<Box<dyn Future<Output = T> + Send + '_>>
 **混合检索**是下一个最自然的方向 —— 本项目的 RRF 融合层已经为它做好了准备
 （`FusionMethod` 现在融合的是「同一种检索的多路结果」，
 加上 BM25 之后就是「两种检索的结果」，RRF 同样适用）。
+
+---
+
+## 技术参考速查
+
+### 四种改写策略对照表
+
+| 策略 | 做什么 | 适合什么 | 成本 | 风险 |
+|---|---|---|---|---|
+| **HyDE** | 让模型先写一段假想答案，用它去检索 | 问题抽象、文档措辞不同 | 1 次生成 | 假想答案可能带偏见 |
+| **Multi-Query** | 从多个角度生成 N 条查询 | 问题有多种问法 | 1 次生成 | N 次检索，延迟↑ |
+| **Rewrite** | 精简改写成关键词短语 | 口语化提问 | 1 次生成 | 可能丢关键信息 |
+| **Decompose** | 拆成多个独立子问题 | 复合问题 | 1 次生成 | 拆得不好就没法答 |
+
+⚠️ **HyDE 的关键洞察**：文档和提问的**语体不同**。
+问「怎么把向量存起来」，文档写「向量索引持久化方案」——
+嵌入模型算的是语义相似度，但**假想答案和文档的语体更接近**，所以 HyDE 有效。
+
+### 融合算法对照表
+
+| | RRF | MaxScore | Concat |
+|---|---|---|---|
+| 公式 | `Σ 1/(k+rank)` | `max_i score_i` | 无（按路顺序） |
+| 需要分数可比 | ❌ | ✅ | ❌ |
+| 奖励「多路都命中」 | ✅ | ❌ | ❌ |
+| 对单路高分敏感 | 较稳健 | ❌ 容易 | — |
+| 用途 | **默认** | 可选 | **对照组** |
+
+### RRF 的 `k` 在干什么
+
+```text
+k = 0   → 第 1 名得 1.0，第 10 名得 0.1    头部极度强势
+k = 60  → 第 1 名得 0.0164，第 10 名得 0.0143  差距很小
+```
+
+`k` 的作用是**压制头部的排他性** —— 让「多路都排在中上」比「一路排第一」更有价值。
+
+这是 RRF 的核心设计哲学：**共识 > 单点最优**。
+
+`k = 60` 是 Cormack 等人原论文的经验值，也是各搜索引擎的通用默认。
+
+### `FusedHit` 的四个字段各管什么
+
+| 字段 | 含义 | 为什么需要 |
+|---|---|---|
+| `score` | 融合分（RRF 加权和） | 排序依据 |
+| `best_score` | 各路里的**最高**原始分 | 「这个块本身有多相关」——和融合分是两回事 |
+| `votes` | 有几路命中 | **共识度** —— 3/3 几乎一定对，1/3 可能是噪声 |
+| `matched_queries` | 命中它的查询列表 | 可解释性：能看出哪条改写起了作用 |
+
+⚠️ **融合分和原始分不可混用** ——
+`score` 是 RRF 加权和（量级 ~0.05），`best_score` 是余弦相似度（量级 ~0.8）。
+把 `score` 当阈值用会全部失效。
+
+### 融合的四个实现要点
+
+```text
+1. 按 ID 去重      同一块在多路出现只算一次，但分数累加
+2. 保留 best_score 融合分 ≠ 原始相关度
+3. 记录 votes      共识度是判断结果可信的关键
+4. 稳定的次级排序   同分时按 best_score，再按 ID
+```
+
+⚠️ **第 4 点最重要** —— 不同检索路径的分数**根本不可比**。
+
+### LLM 输出解析要处理的格式问题
+
+LLM 可能返回：
+
+```text
+1. 问法一          ← 编号前缀
+2. 问法二
+
+- 问法一          ← 项目符号
+- 问法二
+
+```text                 ← 代码块包裹
+问法一
+问法二
+```
+```
+
+解析器要**逐层剥离**：剥代码块 → 剥编号前缀 → 剥项目符号 → 去空行 → 去重。
+
+⚠️ 这些**不是错误**，是模型的自然输出习惯。
+直接按行 split 会把「1. 问法一」整条当成查询，**检索质量直接崩掉**。
+
+### 降级链：改写必须是「纯增强」
+
+```text
+LLM 调用失败  → 回落原问题（不是报错）
+LLM 返回空    → 回落原问题
+解析后为空    → 回落原问题
+```
+
+⚠️ **改写层失败绝不能让整个请求失败** ——
+它是增强手段，不是必需步骤。降级后至少还能用原问题检索。
+
+这是「纯增强（pure enhancement）」原则：加它有收益，不加也能跑。
+
+### `ScriptedLlm` 测试替身
+
+07-query 定义了 `Llm` trait，并提供了 `ScriptedLlm` —— 一个**返回预设响应**的假实现。
+
+所以本项目的测试：
+- ✅ **不需要网络**
+- ✅ **不需要 API key**
+- ✅ **完全可复现**
+
+09-rag-eval 直接复用了这个替身 —— 这就是抽象到 trait 的价值。
+
+### `disable_reasoning` 选项
+
+```rust
+pub struct LlmOptions {
+    pub temperature: f64,
+    pub max_tokens: u32,
+    pub disable_reasoning: bool,   // ← 推理模型必须关掉
+}
+```
+
+⚠️ 推理模型的思考 token 和正文**共用 `max_tokens` 预算**。
+judge / 改写这类需要**稳定短输出**的场景，必须关掉思考
+（`ReasoningEffort::Zero` → DeepSeek 的 `thinking: {"type": "disabled"}`）。
+
+09-rag-eval 的 judge 指标踩过这个坑，详见该项目的 README。
+
+### 配置速查
+
+| 环境变量 | 说明 | 默认 |
+|---|---|---|
+| `QUERY_DATA_DIR` | 知识库目录 | `07-query/data` |
+| `QUERY_INDEX_PATH` | 索引路径 | `07-query/index/index.faiss` |
+| `QUERY_BIND_ADDR` | 监听地址 | `127.0.0.1:3010` |
+| `QUERY_EMBEDDING_MODEL` | 嵌入模型 | `e5` |
+| `QUERY_STRATEGY` | 改写策略 | `none` |
+| `QUERY_NUM_QUERIES` | Multi-Query 生成条数 | `3` |
+| `QUERY_MAX_SUB_QUESTIONS` | Decompose 最大子问题数 | `3` |
+| `QUERY_TRANSFORM_MODEL` | **改写**用的模型 | `deepseek-flash` |
+| `QUERY_TRANSFORM_TEMPERATURE` | 改写温度 | `0.3` |
+| `QUERY_TRANSFORM_MAX_TOKENS` | 改写上限 | `1000` |
+| `QUERY_TOP_K` | 融合后保留数 | `4` |
+| `QUERY_PER_QUERY_K` | 每路召回数 | `4` |
+| `QUERY_FUSION` | 融合方法 | `rrf` |
+| `QUERY_MODEL` | 生成模型 | `deepseek-flash` |
+| `QUERY_TEMPERATURE` | 生成温度 | `0.1` |
+| `QUERY_MAX_TOKENS` | 生成上限 | `2000` |
+
+⚠️ **改写模型和生成模型是两个独立的配置** ——
+改写要**多样**（温度 0.3），生成要**稳定**（温度 0.1）。
+用同一个温度会两头都不讨好。
 
 ---
 

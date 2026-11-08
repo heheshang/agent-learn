@@ -4,18 +4,19 @@
 //! 核心逻辑全在 `pipeline` / `transform` / `fusion` 里，
 //! handler 不做任何业务判断。
 
+use agent_logging::{debug, info, warn};
 use std::time::Instant;
 
+use axum::Json;
 use axum::extract::State;
 use axum::response::IntoResponse;
-use axum::Json;
 
+use crate::api::AppState;
 use crate::api::extract::JsonBody;
 use crate::api::models::{
     AskRequest, AskResponse, CompareRequest, CompareResponse, ReindexResponse, SearchRequest,
     SearchResponse, StrategyResult, TransformRequest, TransformResponse,
 };
-use crate::api::AppState;
 use crate::error::QueryError;
 use crate::fusion::FusionMethod;
 use crate::transform::Strategy;
@@ -79,7 +80,10 @@ fn resolve_strategy(raw: Option<&String>, fallback: Strategy) -> Result<Strategy
 }
 
 /// 解析融合方法（缺省用配置里的默认值）。
-fn resolve_fusion(raw: Option<&String>, fallback: FusionMethod) -> Result<FusionMethod, QueryError> {
+fn resolve_fusion(
+    raw: Option<&String>,
+    fallback: FusionMethod,
+) -> Result<FusionMethod, QueryError> {
     match raw {
         None => Ok(fallback),
         Some(value) => FusionMethod::parse(value).ok_or_else(|| {
@@ -100,6 +104,7 @@ pub async fn ask(
 
     let question = payload.question.trim();
     if question.is_empty() {
+        warn!("问答问题为空");
         return Err(QueryError::BadRequest("问题不能为空".to_string()));
     }
 
@@ -109,6 +114,16 @@ pub async fn ask(
     )?;
 
     let outcome = state.pipeline.ask(question, strategy).await?;
+
+    info!(
+        question = %question,
+        strategy = strategy.name(),
+        hits = outcome.retrieval.hits.len(),
+        citations = outcome.citations.len(),
+        degraded = outcome.retrieval.degraded,
+        elapsed_ms = start.elapsed().as_millis() as u64,
+        "问答完成"
+    );
 
     Ok(Json(AskResponse {
         answer: outcome.answer,
@@ -139,6 +154,7 @@ pub async fn search(
 
     let question = payload.question.trim();
     if question.is_empty() {
+        warn!("搜索问题为空");
         return Err(QueryError::BadRequest("问题不能为空".to_string()));
     }
 
@@ -146,12 +162,22 @@ pub async fn search(
         payload.strategy.as_ref(),
         state.config.transform.default_strategy,
     )?;
-    let fusion = resolve_fusion(
-        payload.fusion.as_ref(),
-        state.config.retrieval.fusion,
-    )?;
+    let fusion = resolve_fusion(payload.fusion.as_ref(), state.config.retrieval.fusion)?;
 
-    let result = state.pipeline.retrieve_with(question, strategy, fusion).await?;
+    let result = state
+        .pipeline
+        .retrieve_with(question, strategy, fusion)
+        .await?;
+
+    info!(
+        question = %question,
+        strategy = strategy.name(),
+        fusion = fusion.name(),
+        hits = result.hits.len(),
+        degraded = result.degraded,
+        elapsed_ms = start.elapsed().as_millis() as u64,
+        "搜索完成"
+    );
 
     Ok(Json(SearchResponse {
         question: result.original_question,
@@ -182,6 +208,7 @@ pub async fn transform(
 
     let question = payload.question.trim();
     if question.is_empty() {
+        warn!("改写问题为空");
         return Err(QueryError::BadRequest("问题不能为空".to_string()));
     }
 
@@ -201,12 +228,21 @@ pub async fn transform(
         Err(e) => {
             let fallback = vec![crate::transform::TransformedQuery::new(question, strategy)];
             if e.is_degradable() {
+                warn!(error = %e, "改写失败，降级为原问题");
                 (fallback, true, Some(format!("改写失败（{e}）")))
             } else {
                 return Err(e);
             }
         }
     };
+
+    debug!(
+        question = %question,
+        strategy = strategy.name(),
+        query_count = queries.len(),
+        degraded,
+        "改写端点完成"
+    );
 
     Ok(Json(TransformResponse {
         question: question.to_string(),
@@ -239,13 +275,11 @@ pub async fn compare(
 
     let question = payload.question.trim();
     if question.is_empty() {
+        warn!("对比问题为空");
         return Err(QueryError::BadRequest("问题不能为空".to_string()));
     }
 
-    let fusion = resolve_fusion(
-        payload.fusion.as_ref(),
-        state.config.retrieval.fusion,
-    )?;
+    let fusion = resolve_fusion(payload.fusion.as_ref(), state.config.retrieval.fusion)?;
 
     // 解析策略列表。
     let strategies = match &payload.strategies {
@@ -271,7 +305,10 @@ pub async fn compare(
 
     for strategy in strategies {
         let strategy_start = Instant::now();
-        let retrieval = state.pipeline.retrieve_with(question, strategy, fusion).await?;
+        let retrieval = state
+            .pipeline
+            .retrieve_with(question, strategy, fusion)
+            .await?;
 
         let hit = payload.expected.as_ref().map(|keywords| {
             let all_text: String = retrieval
@@ -312,6 +349,14 @@ pub async fn compare(
         .filter(|r| r.hit == Some(true))
         .map(|r| r.strategy.name().to_string())
         .collect();
+
+    info!(
+        question = %question,
+        strategy_count = results.len(),
+        successful = ?successful_strategies,
+        elapsed_ms = start.elapsed().as_millis() as u64,
+        "多策略对比完成"
+    );
 
     Ok(Json(CompareResponse {
         question: question.to_string(),
@@ -361,6 +406,12 @@ pub async fn reindex(State(state): State<AppState>) -> Result<Json<ReindexRespon
         &options,
     )
     .await?;
+
+    info!(
+        chunk_count = stats.chunk_count,
+        elapsed_ms = start.elapsed().as_millis() as u64,
+        "索引重建完成"
+    );
 
     Ok(Json(ReindexResponse {
         ok: true,

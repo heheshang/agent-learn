@@ -31,6 +31,7 @@
 //! ⚠️ 注意最后一条：生成失败时，**检索结果仍然是有价值的**。
 //! 所以 `ask` 接口在生成失败时返回检索结果 + 错误信息，而不是丢弃一切。
 
+use agent_logging::{debug, info, warn};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -38,7 +39,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::{AppConfig, RetrievalConfig};
 use crate::error::{QueryError, QueryResult};
-use crate::fusion::{fuse, FusionMethod, FusedHit, RankedRun};
+use crate::fusion::{FusedHit, FusionMethod, RankedRun, fuse};
 use crate::llm::Llm;
 use crate::retrieval::{EmbedMode, MultiQueryRetriever};
 use crate::transform::{
@@ -181,7 +182,8 @@ impl QueryPipeline {
         question: &str,
         strategy: Strategy,
     ) -> QueryResult<TransformedRetrieval> {
-        self.retrieve_with(question, strategy, self.config.fusion).await
+        self.retrieve_with(question, strategy, self.config.fusion)
+            .await
     }
 
     /// 改写 + 检索 + 融合（指定融合方法）。
@@ -193,13 +195,30 @@ impl QueryPipeline {
     ) -> QueryResult<TransformedRetrieval> {
         let question = question.trim();
         if question.is_empty() {
+            warn!("查询问题为空");
             return Err(QueryError::BadRequest("问题不能为空".to_string()));
         }
 
+        debug!(
+            question = %question,
+            strategy = ?strategy,
+            fusion = fusion.name(),
+            "开始查询流水线"
+        );
+
         // ── 1. 改写 ──────────────────────────────────────────────
         let transform_start = Instant::now();
-        let (queries, degraded, degrade_reason) = self.transform_with_fallback(question, strategy).await;
+        let (queries, degraded, degrade_reason) =
+            self.transform_with_fallback(question, strategy).await;
         let transform_ms = transform_start.elapsed().as_millis() as u64;
+
+        debug!(
+            query_count = queries.len(),
+            transform_ms, degraded, "改写阶段完成"
+        );
+        for q in &queries {
+            debug!(query = %q.text, variant = ?q.variant, "改写查询");
+        }
 
         // ── 2. 多路检索 ──────────────────────────────────────────
         let retrieve_start = Instant::now();
@@ -216,17 +235,38 @@ impl QueryPipeline {
         let runs = self.retriever.retrieve_multi(&specs, per_k).await?;
         let retrieve_ms = retrieve_start.elapsed().as_millis() as u64;
 
+        debug!(
+            run_count = runs.len(),
+            per_query_k = per_k,
+            retrieve_ms,
+            "多路检索完成"
+        );
+
         // ── 3. 融合 ──────────────────────────────────────────────
         let mut hits = fuse(&runs, fusion, self.config.top_k);
 
         // 阈值过滤（在融合之后做 —— 因为不同路的分数分布不一样，
         // 融合分数和原始相似度不是一回事，要按 `best_score` 过滤）。
         if let Some(min) = self.config.min_score {
+            let before = hits.len();
             hits.retain(|h| h.best_score >= min);
             for (i, hit) in hits.iter_mut().enumerate() {
                 hit.rank = i;
             }
+            debug!(before, after = hits.len(), min_score = min, "阈值过滤完成");
         }
+
+        info!(
+            question = %question,
+            strategy = ?strategy,
+            fusion = fusion.name(),
+            run_count = runs.len(),
+            hit_count = hits.len(),
+            transform_ms,
+            retrieve_ms,
+            degraded,
+            "查询完成"
+        );
 
         Ok(TransformedRetrieval {
             original_question: question.to_string(),
@@ -257,14 +297,18 @@ impl QueryPipeline {
 
         match transformer.transform(question).await {
             Ok(queries) if !queries.is_empty() => (queries, false, None),
-            Ok(_) => (
-                vec![TransformedQuery::new(question, strategy)],
-                true,
-                Some("改写返回空结果，降级为原问题".to_string()),
-            ),
+            Ok(_) => {
+                warn!("改写返回空结果，降级为原问题");
+                (
+                    vec![TransformedQuery::new(question, strategy)],
+                    true,
+                    Some("改写返回空结果，降级为原问题".to_string()),
+                )
+            }
             Err(e) => {
                 // 改写错误一律降级 —— 「查询改写」必须保持为纯增强：
                 // LLM 挂掉时，服务仍然提供完整的 RAG 能力，只是召回差一点。
+                warn!(error = %e, "改写失败，降级为原问题");
                 (
                     vec![TransformedQuery::new(question, strategy)],
                     true,
@@ -283,9 +327,8 @@ impl QueryPipeline {
         let retrieval = self.retrieve(question, strategy).await?;
 
         if retrieval.hits.is_empty() {
-            return Err(QueryError::NotReady(
-                "检索没有召回到任何内容".to_string(),
-            ));
+            warn!(question = %question, "检索没有召回到任何内容");
+            return Err(QueryError::NotReady("检索没有召回到任何内容".to_string()));
         }
 
         // 组 Prompt —— 复用 06-rag 的组装逻辑（格式一致，便于对比）。
@@ -296,9 +339,21 @@ impl QueryPipeline {
             .llm
             .chat(&prompt.system, &user_prompt)
             .await
-            .map_err(|e| QueryError::Generation(e.to_string()))?;
+            .map_err(|e| {
+                warn!(error = %e, "生成失败");
+                QueryError::Generation(e.to_string())
+            })?;
 
         let citations = extract_citations(&answer, &retrieval.hits);
+
+        info!(
+            question = %question,
+            strategy = ?retrieval.strategy,
+            hit_count = retrieval.hits.len(),
+            citations = citations.len(),
+            elapsed_ms = start.elapsed().as_millis() as u64,
+            "问答完成"
+        );
 
         Ok(AskOutcome {
             answer,
@@ -428,11 +483,7 @@ pub fn make_retriever(
     embedder: Box<dyn rag_05::embed::Embedder>,
     config: &AppConfig,
 ) -> MultiQueryRetriever {
-    MultiQueryRetriever::new(
-        store,
-        embedder,
-        config.retrieval.effective_per_query_k(),
-    )
+    MultiQueryRetriever::new(store, embedder, config.retrieval.effective_per_query_k())
 }
 
 #[cfg(test)]

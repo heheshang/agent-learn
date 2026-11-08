@@ -22,13 +22,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use rag_07::config::{AppConfig, RetrievalConfig, TransformConfig};
-use rag_07::fusion::{fuse, FusionMethod, RankedRun};
+use rag_07::fusion::{FusionMethod, RankedRun, fuse};
 use rag_07::llm::{Llm, LlmFuture, ScriptedLlm};
 use rag_07::pipeline::QueryPipeline;
 use rag_07::retrieval::MultiQueryRetriever;
-use rag_07::transform::{
-    DecomposeTransformer, MultiQueryTransformer, QueryTransformer, Strategy,
-};
+use rag_07::transform::{DecomposeTransformer, MultiQueryTransformer, QueryTransformer, Strategy};
 
 /// 知识库测试文档路径。
 fn kb_path() -> PathBuf {
@@ -48,13 +46,10 @@ async fn make_retriever(data_dir: &std::path::Path, top_k: usize) -> MultiQueryR
     let embedder = rag_07::index::make_embedder(rag_05::embed::Model::MultilingualE5Small)
         .expect("创建嵌入器失败（模型未下载？）");
 
-    let (store, _stats) = rag_07::index::build_store(
-        &embedder,
-        data_dir,
-        &rag_07::index::IndexOptions::default(),
-    )
-    .await
-    .expect("建索引失败");
+    let (store, _stats) =
+        rag_07::index::build_store(&embedder, data_dir, &rag_07::index::IndexOptions::default())
+            .await
+            .expect("建索引失败");
 
     MultiQueryRetriever::new(store, Box::new(embedder), top_k.max(1))
 }
@@ -218,7 +213,10 @@ async fn decompose_splits_into_sub_questions() {
 
     let pipeline = make_pipeline(retriever, llm);
     let result = pipeline
-        .retrieve("光合作用的光反应和暗反应分别在什么位置进行？", Strategy::Decompose)
+        .retrieve(
+            "光合作用的光反应和暗反应分别在什么位置进行？",
+            Strategy::Decompose,
+        )
         .await
         .unwrap();
 
@@ -254,10 +252,7 @@ async fn empty_question_is_rejected() {
     let retriever = make_retriever(dir.path(), 4).await;
     let pipeline = make_pipeline(retriever, Arc::new(ScriptedLlm::always("x")));
 
-    let err = pipeline
-        .retrieve("   ", Strategy::None)
-        .await
-        .unwrap_err();
+    let err = pipeline.retrieve("   ", Strategy::None).await.unwrap_err();
     assert_eq!(err.status_code(), 400);
 }
 

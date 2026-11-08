@@ -149,12 +149,12 @@ sequenceDiagram
 ```mermaid
 graph LR
     subgraph Naive["本项目实现的（朴素基线）"]
-        N1[原样检索<br/>不改写查询]
-        N2[只有向量检索<br/>无 BM25]
-        N3[无重排<br/>用召回顺序]
+        N1["原样检索<br/>不改写查询"]
+        N2["只有向量检索<br/>无 BM25"]
+        N3["无重排<br/>用召回顺序"]
         N4[无元数据过滤]
-        N5[无拒答阈值<br/>检索不到也硬答]
-        N6[单轮生成<br/>无 Agent]
+        N5["无拒答阈值<br/>检索不到也硬答"]
+        N6["单轮生成<br/>无 Agent"]
     end
 
     subgraph Missing["刻意没做的（后续 Part）"]
@@ -172,64 +172,228 @@ graph LR
     style Missing fill:#e8f5e9
 ```
 
-### 思维导图：Naive RAG 的知识地图
+### 知识地图：Naive RAG
+
+```mermaid
+graph LR
+    N1(("06-rag<br/>Naive RAG"))
+    subgraph N2["离线索引"]
+        N3["loader 复用 04-rag"]
+        N2 --> N3
+        N4["splitter 复用 04-rag"]
+        N2 --> N4
+        subgraph N5["embedder 复用 05-rag"]
+            N6["fastembed ONNX"]
+            N5 --> N6
+            N7["L2 归一化"]
+            N5 --> N7
+        end
+        N2 --> N5
+        subgraph N8["store 复用 05-rag"]
+            N9["FaissStore"]
+            N8 --> N9
+            N10["id 映射"]
+            N8 --> N10
+        end
+        N2 --> N8
+        subgraph N11["持久化"]
+            N12["index.faiss"]
+            N11 --> N12
+            N13["meta.json"]
+            N11 --> N13
+        end
+        N2 --> N11
+        subgraph N14["启动时自动建索引"]
+            N15["首个请求不等模型"]
+            N14 --> N15
+        end
+        N2 --> N14
+    end
+    N1 --> N2
+    subgraph N16["在线检索"]
+        subgraph N17["Retriever"]
+            N18["embed 问题"]
+            N17 --> N18
+            N19["search top-k"]
+            N17 --> N19
+            N20["id → Chunk 还原"]
+            N17 --> N20
+        end
+        N16 --> N17
+        subgraph N21["RetrievedChunk"]
+            N22["text"]
+            N21 --> N22
+            N23["source"]
+            N21 --> N23
+            N24["heading_path"]
+            N21 --> N24
+            N25["score"]
+            N21 --> N25
+        end
+        N16 --> N21
+    end
+    N1 --> N16
+    subgraph N26["Prompt 组装"]
+        N27["编号 1 2 3"]
+        N26 --> N27
+        N28["上下文拼接"]
+        N26 --> N28
+        N29["引用说明"]
+        N26 --> N29
+        N30["每句话都有作用"]
+        N26 --> N30
+    end
+    N1 --> N26
+    subgraph N31["生成"]
+        N32["Generator"]
+        N31 --> N32
+        N33["genai 客户端"]
+        N31 --> N33
+        N34["引用编号落地"]
+        N31 --> N34
+        N35["usage 统计"]
+        N31 --> N35
+    end
+    N1 --> N31
+    subgraph N36["Agent 模式"]
+        N37["工具调用循环"]
+        N36 --> N37
+        N38["自主决策"]
+        N36 --> N38
+        N39["与 Naive 的差异"]
+        N36 --> N39
+    end
+    N1 --> N36
+    subgraph N40["API 层"]
+        N41["路由 /api/ask"]
+        N40 --> N41
+        N42["路由 /api/agent"]
+        N40 --> N42
+        N43["路由 /api/search"]
+        N40 --> N43
+        N44["路由 /api/reindex"]
+        N40 --> N44
+        N45["TimeoutLayer 120s"]
+        N40 --> N45
+        N46["RequestBodyLimitLayer"]
+        N40 --> N46
+        N47["TraceLayer"]
+        N40 --> N47
+        N48["统一 JSON 错误"]
+        N40 --> N48
+    end
+    N1 --> N40
+    subgraph N49["核心认知"]
+        N50["Naive 是教学基线"]
+        N49 --> N50
+        N51["每个增强都要用差值证明"]
+        N49 --> N51
+        N52["索引单独一层"]
+        N49 --> N52
+        N53["异步里 Mutex 的坑"]
+        N49 --> N53
+    end
+    N1 --> N49
+```
+
+---
+
+## 思维导图：Naive RAG 全貌
 
 ```mermaid
 mindmap
-  root((06-rag<br/>Naive RAG))
+  root((06-rag))
     离线索引
-      loader 复用 04-rag
-      splitter 复用 04-rag
-      embedder 复用 05-rag
-        fastembed ONNX
-        L2 归一化
-      store 复用 05-rag
-        FaissStore
-        id 映射
-      持久化
-        index.faiss
-        meta.json
-      启动时自动建索引
-        首个请求不等模型
-    在线检索
-      Retriever
-        embed 问题
-        search top-k
-        id → Chunk 还原
-      RetrievedChunk
-        text
-        source
-        heading_path
-        score
-    Prompt 组装
-      编号 1 2 3
-      上下文拼接
-      引用说明
-      每句话都有作用
-    生成
-      Generator
-      genai 客户端
-      引用编号落地
-      usage 统计
-    Agent 模式
-      工具调用循环
-      自主决策
-      与 Naive 的差异
-    API 层
-      路由 /api/ask
-      路由 /api/agent
-      路由 /api/search
-      路由 /api/reindex
-      TimeoutLayer 120s
-      RequestBodyLimitLayer
-      TraceLayer
-      统一 JSON 错误
+      index.rs
+        加载 分割
+        向量化
+        存 FAISS
+    在线问答
+      retrieval.rs
+        Retriever
+        top_k 截断
+        相似度阈值
+      prompt.rs
+        assemble 组装上下文
+        assemble_no_context 拒答
+        引用编号
+      generation.rs
+        LLM 调用
+        TokenUsage
+        温度 max_tokens
+    自主 Agent
+      agent.rs
+        search_knowledge_base 工具
+        工具调用循环
+        max_iterations 上限
+        ToolCallRecord 审计
+        hit_max_iterations
+    HTTP API
+      api/handlers.rs
+        ask 问答
+        search 检索
+      api/models.rs
+        请求响应契约
+      统一错误 error.rs
     核心认知
-      Naive 是教学基线
-      每个增强都要用差值证明
-      索引单独一层
-      异步里 Mutex 的坑
+      Naive RAG 是基线 不是终点
+      上下文即答案质量上限
+      空上下文必须显式信号
+      工具回填顺序不能错
+      每次增强都要用差值证明
 ```
+
+---
+
+## 问答链路：从问题到带引用的答案
+
+```mermaid
+flowchart TB
+    Q["用户问题"] --> RET["Retriever::retrieve<br/>embed_query → 向量检索 → top_k"]
+    RET --> TH{"相似度阈值<br/>≥ min_score?"}
+    TH -->|否| REJ["拒答<br/>assemble_no_context<br/>「根据现有资料无法回答」"]
+    TH -->|是| CTX["组装上下文<br/>标题 + 正文 + 引用编号"]
+    CTX --> PROMPT["assemble<br/>system + user"]
+    PROMPT --> LLM["LLM 生成"]
+    LLM --> ANS["答案 + citations[]"]
+
+    REJ --> LLM
+
+    style RET fill:#e8f5e9
+    style REJ fill:#ffebee
+    style ANS fill:#fff3e0
+```
+
+### 自主 Agent 的工具调用循环
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as 用户
+    participant A as Agent
+    participant M as 模型
+    participant T as 检索工具
+
+    U->>A: 问题
+    A->>M: 问题 + 工具声明<br/>(search_knowledge_base)
+    M-->>A: tool_call(query, top_k)
+    A->>T: 执行检索
+    T-->>A: 命中的片段
+    A->>M: assistant(tool_calls)<br/>+ tool(results) ★顺序重要
+    alt 模型还要继续检索
+        M-->>A: tool_call(...)
+        A->>M: 回填，继续
+    else 模型给出答案
+        M-->>A: 纯文本答案
+        A-->>U: 答案 + 工具调用记录
+    end
+
+    Note over A,M: 超过 max_iterations → 最后再问一次<br/>强制基于已有信息作答
+```
+
+⚠️ **回填顺序**：先 `assistant(tool_calls)`，再 `tool(results)`。
+少了前者，模型不知道自己「调过什么工具、参数是什么」，
+就没法把结果和调用对应起来。
 
 ---
 
@@ -592,6 +756,28 @@ curl -s http://127.0.0.1:3000/api/search \
 | `RAG_AUTO_INDEX` | 启动时自动建索引 | `true` |
 | `FASTEMBED_CACHE_DIR` | 嵌入模型缓存目录 | `<workspace>/.fastembed_cache` |
 
+---
+
+## 日志
+
+全仓库统一走 `00-logging`（`agent-logging`）。
+
+```bash
+RUST_LOG=info cargo run -p rag-06 -- demo
+RUST_LOG=debug,rag_06=trace cargo run -p rag-06 -- demo
+```
+
+| 事件 | 级别 | 关键字段 |
+|---|---|---|
+| 建索引（加载 → 分块 → 向量化 → 写入） | `INFO` | `chunk_count` / `elapsed_ms` |
+| 检索 | `DEBUG` | `top_k` / `hit_count` / `elapsed_ms` |
+| 相似度阈值过滤掉的块数 | `DEBUG` | `dropped` |
+| Prompt 组装 | `DEBUG` | `context_len` / `chunk_count` |
+| 生成完成 | `INFO` | `answer_len` / `citation_count` / `elapsed_ms` |
+| LLM 调用失败 | `ERROR` | `error` |
+
+HTTP 层用 `agent_logging::trace_layer()`。
+
 RAG 系统里最容易被「悄悄改坏」的参数是 `top_k` 和 `chunk_size`：
 改一个数字，检索结果就变了，答案质量跟着变，但**没有任何报错**。
 所以把它们收拢到一处 + 启动时打印出来。
@@ -864,6 +1050,110 @@ let cases = [
 - [Design and Develop a RAG Solution on Azure — Microsoft Learn](https://learn.microsoft.com/en-us/azure/architecture/ai-ml/guide/rag/rag-solution-design-and-evaluation-guide)
 - [Effective Practices for Architecting a RAG Pipeline — InfoQ](https://www.infoq.com/articles/architecting-rag-pipeline/)
 - [Common retrieval augmented generation (RAG) techniques explained — Microsoft Cloud Blog](https://www.microsoft.com/en-us/microsoft-cloud/blog/2025/02/04/common-retrieval-augmented-generation-rag-techniques-explained/)
+
+---
+
+## 技术参考速查
+
+### RAG 三档架构对照
+
+| | Naive（06） | Advanced（07/08） | Modular |
+|---|---|---|---|
+| 检索 | 单路向量 | 多路 + 融合 + 重排 | 可插拔检索器 |
+| 查询处理 | 原样送检 | 改写 / HyDE / 分解 | 独立改写模块 |
+| 生成 | 一次 | 一次 | 可多次 / 分步 |
+| 目的 | **基线** | 提升精度 | 工程化 |
+
+⚠️ **Naive 不是「差版本」，是「对照组」** ——
+后面 07/08/09 的所有收益，都是相对于它测出来的。
+
+### 三种问答模式的对照
+
+| | Naive RAG | 自主 Agent | 纯 LLM |
+|---|---|---|---|
+| 检索时机 | 固定，提问前一次 | **模型自己决定** | 不检索 |
+| 检索次数 | 1 | 0~N | 0 |
+| 优点 | 简单、可预测 | 问题复杂时更准 | 最快 |
+| 缺点 | 问法不对就召不回 | 慢、不确定、可能死循环 | 靠模型先验 |
+| 成本 | 1 次 LLM | 1~N 次 LLM | 1 次 LLM |
+
+### `assemble` 的三个变体
+
+| 函数 | 场景 | 资料区内容 |
+|---|---|---|
+| `assemble(result, question)` | 正常检索到内容 | 编号的上下文 |
+| `assemble_with_system(result, question, system)` | Agent 场景 | 同上，但换 system 提示 |
+| `assemble_no_context(question)` | 没召回到 / 想拒答 | **「没有召回到任何相关资料」** |
+
+⚠️ **空上下文必须给显式信号** —— 给一个空的资料块，
+模型会误以为「资料里确实没写，所以我知道答案」，
+于是**用先验知识编造答案**。这个细节直接决定 `faithfulness` 指标的高下。
+
+### 引用编号 `[1]` `[2]` 的作用
+
+```text
+【参考资料】
+[1] # RAG > 混合检索
+BM25 由 IDF、词频饱和、长度归一化组成……
+
+【问题】
+BM25 打分公式是什么
+```
+
+模型输出里的 `[1]` 对应上下文里的 `[1]` ——
+这就是 09-rag-eval 的 `faithfulness` 能**定位到具体句子**的前提。
+
+### 自主 Agent 的关键设计
+
+| 设计点 | 本项目做法 | 原因 |
+|---|---|---|
+| 工具声明 | `search_knowledge_base(query, top_k)` | 参数越简单，模型越容易填对 |
+| 参数校验 | `query` 空 → 回错误让模型纠正 | **回错误比崩溃好** |
+| `top_k` 钳制 | `.clamp(1, 20)` | 防止模型要 1000 条撑爆上下文 |
+| 迭代上限 | `max_iterations` | 防止死循环烧钱 |
+| 达到上限 | 最后再问一次强制作答 | 宁可答案差点，不要不返回 |
+| 未知工具 | 回「错误：未知工具」 | 模型能自己纠正 |
+| 审计 | `Vec<ToolCallRecord>` | 能回看模型调了什么 |
+
+⚠️ **`hit_max_iterations: true` 是有价值的信号** ——
+它说明工具描述不够清楚，或者问题太复杂。**这个字段本身就该被监控。**
+
+### `ToolCallRecord` 的价值
+
+```text
+iteration   第几轮调的工具
+tool        工具名
+arguments   模型给的参数   ← 这里能看出模型有没有改写查询词
+result      工具返回内容
+```
+
+想优化 Agent 的表现，先看 `arguments` —— **模型到底用原话检索，
+还是改写成了关键词**。这直接决定了 07-query 的查询改写有没有必要。
+
+### 配置速查
+
+| 环境变量 | 说明 | 默认 |
+|---|---|---|
+| `RAG_DATA_DIR` | 知识库目录 | `06-rag/data` |
+| `RAG_INDEX_PATH` | 索引路径 | `06-rag/index/index.faiss` |
+| `RAG_MODEL` | 生成模型 | `deepseek-flash` |
+| `RAG_TEMPERATURE` | 生成温度 | `0.1` |
+| `RAG_MAX_TOKENS` | 生成上限 | `2000` |
+| `RAG_TOP_K` | 检索条数 | `4` |
+| `RAG_MIN_SCORE` | 相似度阈值 | — |
+| `RAG_EMBEDDING_MODEL` | 嵌入模型 | `e5` |
+| `RAG_CHUNK_SIZE` | 块大小（token） | `300` |
+| `RAG_CHUNK_OVERLAP` | 块重叠（token） | `30` |
+| `RAG_AUTO_INDEX` | 启动时自动建索引 | `true` |
+| `RAG_BIND_ADDR` | 监听地址 | `127.0.0.1:3000` |
+
+### 与后续项目的关系
+
+| 项目 | 在 06 的基础上加了什么 |
+|---|---|
+| [07-query](07-query/) | 查询改写 + 多路融合 —— 解决「问法不对」 |
+| [08-rag](08-rag/) | BM25 + 重排 —— 解决「检索不准」 |
+| [09-rag-eval](09-rag-eval/) | 评估指标 —— 解决「说不清有没有用」 |
 
 ---
 

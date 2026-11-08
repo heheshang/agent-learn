@@ -59,6 +59,17 @@ pub enum StoreError {
     #[error("Chroma 操作失败: {0}")]
     Chroma(String),
 
+    /// Milvus 操作失败。
+    ///
+    /// 加这个变体是为了让 10-rag-milvus 能把 Milvus 实现成同一个
+    /// `VectorStore` trait —— 上层代码不需要知道底下是哪个库。
+    #[error("Milvus 操作失败: {0}")]
+    Milvus(String),
+
+    /// Qdrant 操作失败。
+    #[error("Qdrant 操作失败: {0}")]
+    Qdrant(String),
+
     /// 索引文件读写失败。
     #[error("索引文件 IO 失败: {0}")]
     Io(#[from] std::io::Error),

@@ -28,6 +28,7 @@
 //! （`rag_summary_chunks` vs `rag_chunks`）—— 否则两个项目的索引
 //! 会互相覆盖，而且因为 embedding 模型一样，撞起来极难发现。
 
+use agent_logging::{info, stage_guard};
 use std::sync::Arc;
 
 use rag_05::embed::{Embedder, LocalEmbedder, Model};
@@ -155,6 +156,16 @@ pub async fn ensure_index(config: &AppConfig) -> RagResult<IndexReport> {
     // 客户端 BM25 索引（不落盘，每次启动重建 —— 和 08-rag 同一个理由）。
     let bm25 = build_bm25_index(&config.data_dir, &config.splitter)?;
 
+    info!(
+        collection = %config.milvus.collection,
+        chunks = inserted as usize,
+        server_count,
+        bm25_docs = bm25.len(),
+        created,
+        elapsed_ms = start.elapsed().as_millis() as u64,
+        "索引就绪"
+    );
+
     Ok(IndexReport {
         chunks: inserted as usize,
         server_count,
@@ -172,6 +183,7 @@ pub async fn ensure_index(config: &AppConfig) -> RagResult<IndexReport> {
 /// 返回 `(流水线, 索引报告)` —— 索引报告给 `/` 端点展示用
 /// （「索引：未建立」对运维没用）。
 pub async fn bootstrap(config: &AppConfig) -> RagResult<(SummaryPipeline, IndexReport)> {
+    let _guard = stage_guard("装配摘要式 RAG 流水线");
     let index_report = ensure_index(config).await?;
     tracing_report(&index_report);
 
@@ -248,6 +260,14 @@ pub async fn bootstrap(config: &AppConfig) -> RagResult<(SummaryPipeline, IndexR
 /// 打印索引报告。
 fn tracing_report(report: &IndexReport) {
     eprintln!("  索引        : {}", report.summary());
+    info!(
+        collection = %report.collection,
+        chunks = report.chunks,
+        server_count = report.server_count,
+        bm25_docs = report.bm25_docs,
+        created = report.created,
+        "索引报告"
+    );
 }
 
 /// 检查后端是否可达（健康检查）。

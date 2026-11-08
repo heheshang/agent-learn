@@ -28,6 +28,7 @@
 //! 让「哪些环节挂了服务还能不能服务」变成一个**可验证的行为**，
 //! 而不是散落在各处 `if let Ok(...)` 里的隐式逻辑。
 
+use agent_logging::{error, warn};
 use thiserror::Error;
 
 /// 摘要式 RAG 系统的错误。
@@ -106,6 +107,22 @@ impl axum::response::IntoResponse for RagError {
 
         let status =
             StatusCode::from_u16(self.status_code()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+
+        match &self {
+            RagError::BadRequest(_) => {
+                warn!(status = status.as_u16(), error = %self, "请求参数不合法");
+            }
+            RagError::NotReady(_) => {
+                warn!(status = status.as_u16(), error = %self, "索引未就绪");
+            }
+            RagError::Retrieval(_) | RagError::Internal(_) => {
+                error!(status = status.as_u16(), error = %self, "请求处理失败");
+            }
+            RagError::Rerank(_) | RagError::Generation(_) => {
+                error!(status = status.as_u16(), error = %self, "上游模型调用失败");
+            }
+        }
+
         let body = crate::api::models::ErrorResponse {
             error: status.canonical_reason().unwrap_or("Error").to_string(),
             message: self.to_string(),

@@ -31,6 +31,7 @@
 
 use std::path::{Path, PathBuf};
 
+use agent_logging::{info, warn};
 use rag_04::splitter::SplitterConfig;
 use rag_05::embed::{Embedder, LocalEmbedder, Model};
 use rag_05::store::{FaissStore, IndexKind, VectorStore};
@@ -109,8 +110,12 @@ pub async fn build_store(
     let build = rag_05::pipeline::build_chunks(embedder, &config)
         .map_err(|e| RagError::Internal(format!("构建索引失败: {e}")))?;
 
-    let mut store = FaissStore::new(options.index_kind, embedder.dimension(), embedder.model_name())
-        .map_err(|e| RagError::Internal(format!("创建 FAISS 索引失败: {e}")))?;
+    let mut store = FaissStore::new(
+        options.index_kind,
+        embedder.dimension(),
+        embedder.model_name(),
+    )
+    .map_err(|e| RagError::Internal(format!("创建 FAISS 索引失败: {e}")))?;
 
     store
         .add(&build.chunks)
@@ -124,6 +129,15 @@ pub async fn build_store(
         index_kind: options.index_kind.description(),
         embedding_model: embedder.model_name().to_string(),
     };
+
+    info!(
+        document_count = stats.document_count,
+        chunk_count = stats.chunk_count,
+        dimension = stats.dimension,
+        index_kind = %stats.index_kind,
+        model = %stats.embedding_model,
+        "索引构建完成"
+    );
 
     Ok((store, stats))
 }
@@ -147,6 +161,7 @@ pub async fn build_and_save(
         .await
         .map_err(|e| RagError::Internal(format!("保存索引失败: {e}")))?;
 
+    info!(path = %index_path.display(), "索引已落盘");
     Ok(stats)
 }
 
@@ -155,15 +170,18 @@ pub async fn build_and_save(
 /// ⚠️ 会校验嵌入模型名 —— 换模型没重建索引会在这里报错，
 /// 而不是等到检索时返回一堆不相关的块。
 pub async fn load_store(embedder: &dyn Embedder, index_path: &Path) -> RagResult<FaissStore> {
-    let mut store =
-        FaissStore::new(IndexKind::Flat, embedder.dimension(), embedder.model_name())
-            .map_err(|e| RagError::Internal(format!("创建 FAISS 索引失败: {e}")))?;
+    let mut store = FaissStore::new(IndexKind::Flat, embedder.dimension(), embedder.model_name())
+        .map_err(|e| RagError::Internal(format!("创建 FAISS 索引失败: {e}")))?;
 
     store.load(index_path).await.map_err(|e| match e {
         rag_05::store::StoreError::Faiss(msg) => {
+            warn!(path = %index_path.display(), error = %msg, "索引加载失败（多半是换了嵌入模型）");
             RagError::Internal(format!("加载索引失败（可能是换了嵌入模型，需重建）: {msg}"))
         }
-        other => RagError::Internal(format!("加载索引失败: {other}")),
+        other => {
+            warn!(path = %index_path.display(), error = %other, "索引加载失败");
+            RagError::Internal(format!("加载索引失败: {other}"))
+        }
     })?;
 
     Ok(store)
@@ -231,16 +249,26 @@ pub async fn ensure_index(config: &AppConfig) -> RagResult<(FaissStore, IndexSta
             index_kind: store.index_description(),
             embedding_model: embedder.model_name().to_string(),
         };
+        info!(
+            path = %config.index_path.display(),
+            chunk_count = stats.chunk_count,
+            "索引已存在，直接加载"
+        );
         return Ok((store, stats, false));
     }
 
     if !config.auto_index {
+        warn!(
+            path = %config.index_path.display(),
+            "索引不存在且未开启自动建索引"
+        );
         return Err(RagError::NotReady(format!(
             "索引不存在: {}，且未开启自动建索引（RAG_AUTO_INDEX=false）",
             config.index_path.display()
         )));
     }
 
+    info!("索引不存在，开始自动构建（首次会下载嵌入模型，耗时较长）");
     let stats = build_and_save(&embedder, &config.data_dir, &config.index_path, &options).await?;
     let store = load_store(&embedder, &config.index_path).await?;
 

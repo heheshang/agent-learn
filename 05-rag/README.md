@@ -166,51 +166,182 @@ graph TB
     style HNSW fill:#f3e5f5
 ```
 
-### 思维导图：向量化与存储的知识地图
+### 知识地图：向量化与存储
+
+```mermaid
+graph LR
+    N1(("05-rag<br/>向量化 + 存储"))
+    subgraph N2["Embedding 原理"]
+        N3["one-hot → dense"]
+        N2 --> N3
+        subgraph N4["三种相似度"]
+            N5["余弦"]
+            N4 --> N5
+            N6["点积"]
+            N4 --> N6
+            N7["欧氏"]
+            N4 --> N7
+        end
+        N2 --> N4
+        subgraph N8["归一化 最关键一步"]
+            N9["归一化后 点积 = 余弦"]
+            N8 --> N9
+            N10["FAISS 用 IP 度量"]
+            N8 --> N10
+        end
+        N2 --> N8
+        subgraph N11["非对称模型前缀"]
+            N12["query 走 query 侧前缀"]
+            N11 --> N12
+            N13["passage 走 passage 侧前缀"]
+            N11 --> N13
+        end
+        N2 --> N11
+        N14["维度 换模型必须重建索引"]
+        N2 --> N14
+    end
+    N1 --> N2
+    subgraph N15["Sentence Transformers"]
+        N16["fastembed 本地 ONNX"]
+        N15 --> N16
+        N17["无 Python 无 API key"]
+        N15 --> N17
+        N18["模型缓存到本地"]
+        N15 --> N18
+        N19["版本锁 4.x"]
+        N15 --> N19
+    end
+    N1 --> N15
+    subgraph N20["FAISS"]
+        N21["Flat 精确"]
+        N20 --> N21
+        N22["IVF 聚类"]
+        N20 --> N22
+        N23["HNSW 图"]
+        N20 --> N23
+        N24["ID 映射必须存在索引内"]
+        N20 --> N24
+        N25["IVF 描述串带 Flat 后缀"]
+        N20 --> N25
+        subgraph N26["持久化两个文件"]
+            N27["index.faiss"]
+            N26 --> N27
+            N28["meta.json"]
+            N26 --> N28
+        end
+        N20 --> N26
+    end
+    N1 --> N20
+    subgraph N29["Chroma"]
+        N30["HTTP 客户端"]
+        N29 --> N30
+        N31["距离语义必须对齐"]
+        N29 --> N31
+        N32["服务端元数据过滤"]
+        N29 --> N32
+        N33["upsert 而非 add"]
+        N29 --> N33
+        N34["create_collection 不支持 configuration"]
+        N29 --> N34
+    end
+    N1 --> N29
+    subgraph N35["VectorStore trait"]
+        N36["add search save load"]
+        N35 --> N36
+        N37["让检索层不依赖具体后端"]
+        N35 --> N37
+    end
+    N1 --> N35
+    subgraph N38["核心认知"]
+        N39["Embedding 决定什么算相关"]
+        N38 --> N39
+        N40["VectorStore 决定在多少候选里找"]
+        N38 --> N40
+    end
+    N1 --> N38
+```
+
+---
+
+## 思维导图：向量化与存储体系
 
 ```mermaid
 mindmap
-  root((05-rag<br/>向量化 + 存储))
-    Embedding 原理
-      one-hot → dense
-      三种相似度
-        余弦
-        点积
-        欧氏
-      归一化 最关键一步
-        归一化后 点积 = 余弦
-        FAISS 用 IP 度量
-      非对称模型前缀
-        query 走 query 侧前缀
-        passage 走 passage 侧前缀
-      维度 换模型必须重建索引
-    Sentence Transformers
-      fastembed 本地 ONNX
-      无 Python 无 API key
-      模型缓存到本地
-      版本锁 4.x
-    FAISS
-      Flat 精确
-      IVF 聚类
-      HNSW 图
-      ID 映射必须存在索引内
-      IVF 描述串带 Flat 后缀
-      持久化两个文件
-        index.faiss
-        meta.json
-    Chroma
-      HTTP 客户端
-      距离语义必须对齐
-      服务端元数据过滤
-      upsert 而非 add
-      create_collection 不支持 configuration
-    VectorStore trait
-      add search save load
-      让检索层不依赖具体后端
+  root((05-rag))
+    嵌入层 embed.rs
+      Embedder trait
+        embed_documents 批量
+        embed_query 单条
+        embed_chunks
+      前缀约定
+        E5 query+passage
+        BGE 查询可加
+        MiniLM 对称不加
+      归一化
+        L2 归一化
+        余弦 = 内积
+      维度
+        384 e5 minilm
+        512 bge
+        换模型必须重建索引
+    存储层 store/mod.rs
+      VectorStore trait
+        add search len
+        save load
+      SearchHit
+        id score
+      StoreError
+    FAISS 实现
+      IndexKind
+        Flat 暴力精确
+        IVF nlist 聚类
+        HNSW M 分层图
+      IDMap 前缀
+      sidecar meta.json
+      持久化 .faiss + .meta.json
+    Chroma 实现
+      HTTP 服务
+      元数据过滤 where
+      collection 持久化
+    索引流水线 pipeline.rs
+      build_chunks
+      IndexConfig
+      IndexBuild
     核心认知
       Embedding 决定什么算相关
-      VectorStore 决定在多少候选里找
+      VectorStore 决定候选池
+      归一化让余弦等于内积
+      前缀用错明显拉低召回
+      换模型必须重建索引
 ```
+
+---
+
+## 索引流水线：从块到可检索
+
+```mermaid
+flowchart LR
+    C["Chunk[]<br/>来自 04-rag"] --> EMB["Embedder<br/>embed_chunks<br/>加前缀 → 推理 → L2 归一化"]
+    EMB --> EC["EmbeddedChunk[]<br/>id + vector + heading_path"]
+    EC --> ST["VectorStore::add"]
+    ST --> FS["FaissStore<br/>IndexFlat / IVF / HNSW"]
+    ST --> CS["ChromaStore<br/>HTTP + 元数据"]
+    FS --> SAVE["持久化<br/>index.faiss + index.faiss.meta.json"]
+    CS --> SAVE2["持久化<br/>Chroma 目录"]
+
+    Q["查询文本"] --> QE["Embedder::embed_query<br/>加 query 前缀 → 归一化"]
+    QE --> SRCH["VectorStore::search<br/>返回 SearchHit{id, score}"]
+    FS --> SRCH
+    CS --> SRCH
+
+    style EMB fill:#fff3e0
+    style ST fill:#f3e5f5
+    style SRCH fill:#e8f5e9
+```
+
+⚠️ **查询和文档走的是不同的路径** ——
+`embed_query` 会加 `query: ` 前缀，`embed_documents` 会加 `passage: ` 前缀。
+用错前缀会**明显拉低召回率**，而且不会有任何报错。
 
 ---
 
@@ -669,8 +800,27 @@ async fn many_records_keep_correct_label_mapping() {
 
 ---
 
-## 八、下一步
+## 日志
 
+全仓库统一走 `00-logging`（`agent-logging`）。
+
+```bash
+RUST_LOG=info cargo run -p rag-05 -- index
+RUST_LOG=debug,rag_05=trace cargo run -p rag-05 -- search "问题"
+```
+
+| 事件 | 级别 | 关键字段 |
+|---|---|---|
+| 建索引（加载 → 分块 → 向量化 → 写入） | `INFO` | `chunk_count` / `dimension` / `elapsed_ms` |
+| 嵌入模型加载（首次会下载） | `INFO` | `model` / `dimension` |
+| 向量化一批块 | `DEBUG` | `batch_size` / `total` |
+| 写入 FAISS / Chroma | `DEBUG` | `store` / `count` |
+| 检索 | `DEBUG` | `top_k` / `hit_count` / `elapsed_ms` |
+| 维度不匹配 | `ERROR` | `expected` / `actual` |
+
+---
+
+## 八、下一步
 本部分只做了**召回（retrieve）**。完整 RAG 还需要：
 
 - **重排（rerank）** —— 召回 50 条，再用 cross-encoder 精排 top-5
@@ -684,6 +834,110 @@ async fn many_records_keep_correct_label_mapping() {
 
 > ⚠️ Part 3 里的检索**没有**做重排（Naive 的定义就是不做）。
 > 重排是 Part 4 的内容。
+
+---
+
+## 技术参考速查
+
+### 三种嵌入模型对照表
+
+| | multilingual-e5-small | bge-small-zh-v1.5 | all-MiniLM-L6-v2 |
+|---|---|---|---|
+| 维度 | 384 | 512 | 384 |
+| 语言 | 多语言 | 中文为主 | 英文 |
+| 查询前缀 | `query: ` | 无（可不加） | 无 |
+| 文档前缀 | `passage: ` | 无 | 无 |
+| 大小 | ~470MB | ~95MB | ~90MB |
+| 适合 | **默认**，中英混合 | 纯中文 | 纯英文、小模型 |
+
+⚠️ **前缀用错会明显拉低召回率** —— 这是嵌入环节最常见的静默 bug。
+`Embedder` trait 把这件事封装掉了：上层调 `embed_query` / `embed_documents`，
+**不需要知道用的是哪个模型**。
+
+### 为什么必须 L2 归一化
+
+```text
+归一化前：cos(a,b) = a·b / (|a|·|b|)     ← 要算两次范数
+归一化后：cos(a,b) = a·b                 ← 就是内积
+```
+
+所以归一化之后：
+
+| FAISS 索引 | 配置 | 分数含义 |
+|---|---|---|
+| `IndexFlatIP` | `InnerProduct` | **余弦相似度**（因为已归一化） |
+| `IndexFlatL2` | `L2` | 距离，需要 `1 - d/2` 换算成本项目统一用「**越大越相似**」的语义 |
+
+### FAISS 三种索引对照表
+
+| | Flat | IVF{nlist} | HNSW{M} |
+|---|---|---|---|
+| 原理 | 暴力遍历全部 | k-means 聚类剪枝 | 多层可导航小世界图 |
+| 构建 | 无 | 需训练（聚类） | 需训练（建图） |
+| 查询 | O(N) | O(N/nlist × nprobe) | O(log N) 量级 |
+| 召回 | **100% 精确** | 有损失 | 有损失 |
+| 内存 | 低 | 中 | **高**（图结构） |
+| 适用 | <1万，要精确 | 十万级 | **大规模高召回** |
+
+⚠️ **IVF 的描述串必须带 `,Flat` 后缀** —— 写 `IVF4` 会被 FAISS 解析失败。
+这是本项目实际踩过的坑。
+
+### `IDMap,` 前缀的作用
+
+```text
+不带 IDMap：FAISS 只知道「第 i 个向量」，不知道它是谁
+带 IDMap：  索引自带 ID 映射，ID 能随索引一起持久化
+```
+
+所以本项目统一用 `IDMap,{描述串}` 作为交给 FAISS 的完整描述。
+
+### sidecar 元数据为什么必须单独存
+
+```text
+index.faiss          ← FAISS 的索引文件，只有向量和 ID
+index.faiss.meta.json ← 我们自己的：模型名、索引类型、维度、记录顺序
+```
+
+FAISS 不知道我们的块长什么样（`heading_path`、原文、来源文件），
+所以要单独存一份。
+
+⚠️ **加载时必须校验模型名** —— 不一致就报错，
+否则**维度对不上，FAISS 会直接报错或静默返回垃圾结果**。
+
+### `VectorStore` trait 的契约
+
+| 方法 | 语义 | FAISS | Chroma |
+|---|---|---|---|
+| `add` | 追加向量 | ✅ | ✅ |
+| `search` | 检索，返回 `SearchHit` | ✅ | ✅ |
+| `len` | 当前条数 | ✅ | ✅ |
+| `save` | 持久化 | 写 `.faiss` | Chroma 自动 |
+| `load` | 加载 | 读 `.faiss` | Chroma 自动 |
+
+⚠️ **在 10-rag-milvus（远程向量库）上，`save`/`load` 是 no-op** ——
+数据在服务端，客户端只负责「确保它在」。这不是缺陷。
+
+### 换模型的三连坑
+
+```text
+1. 维度变了        → 旧索引的向量维度对不上
+2. 向量空间变了    → 旧向量和新查询不在同一空间，检索结果全是垃圾
+3. 语义变了        → 就算维度碰巧一样，也完全不可比
+```
+
+**结论：换嵌入模型 = 重建索引，没有例外。**
+本项目在 sidecar 里存 `model_name` 就是为了在加载时挡住第 3 种情况。
+
+### 嵌入推理是 CPU 密集的同步调用
+
+```rust
+tokio::task::spawn_blocking(move || { ... })
+```
+
+直接调会**阻塞 tokio 的工作线程** —— 一次几十到几百毫秒，
+期间同线程上的其它请求全被卡住。
+
+09-rag-eval 里也踩了同样的坑（语义相似度指标那段）。
 
 ---
 

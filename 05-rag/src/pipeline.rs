@@ -9,6 +9,7 @@
 
 use std::path::{Path, PathBuf};
 
+use agent_logging::{debug, info};
 use anyhow::Result;
 use rag_04::loader::{LoadedDoc, load_directory};
 use rag_04::splitter::{Chunk, Splitter, SplitterConfig, StructureAwareSplitter, TokenCounter};
@@ -70,7 +71,21 @@ pub fn build_chunks(embedder: &dyn Embedder, config: &IndexConfig) -> Result<Ind
         raw_chunks.extend(splitter.split(doc, &counter));
     }
 
+    debug!(
+        doc_count = documents.len(),
+        raw_chunk_count = raw_chunks.len(),
+        "分块阶段完成，开始向量化"
+    );
+
     let chunks = embedder.embed_chunks(&raw_chunks)?;
+
+    info!(
+        doc_count = documents.len(),
+        chunk_count = chunks.len(),
+        model = embedder.model_name(),
+        dimension = embedder.dimension(),
+        "索引构建完成（尚未落盘）"
+    );
 
     Ok(IndexBuild {
         chunks,

@@ -29,14 +29,14 @@
 
 use std::time::Duration;
 
-use axum::routing::{get, post};
+use agent_logging::trace_layer;
 use axum::Router;
+use axum::routing::{get, post};
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::timeout::TimeoutLayer;
-use tower_http::trace::TraceLayer;
 
-use crate::api::handlers;
 use crate::api::AppState;
+use crate::api::handlers;
 
 /// 请求超时。
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(180);
@@ -58,6 +58,8 @@ pub fn router(state: AppState) -> Router {
             REQUEST_TIMEOUT,
         ))
         .layer(RequestBodyLimitLayer::new(MAX_BODY_SIZE))
-        .layer(TraceLayer::new_for_http())
+        // 请求追踪：给每个请求分配 request_id，
+        // handler 内部的日志会自动带上它。
+        .layer(trace_layer())
         .with_state(state)
 }

@@ -12,6 +12,7 @@
 //! 事件系统：`AgentEvent` 是循环的生命周期流，`subscribe_fn` 注册监听器，
 //! 返回的 `Subscription` 必须持有到运行结束（RAII 退订）。
 
+use agent_logging::{debug, info, warn};
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -47,12 +48,16 @@ fn calculate_tool() -> Arc<dyn AgentTool> {
                 .to_string();
 
             match calculate(&expr) {
-                Ok(value) => Ok(AgentToolResult::json(json!({
-                    "expression": expr,
-                    "result": value,
-                }))),
+                Ok(value) => {
+                    info!(expression = %expr, value, "工具 calculate 执行成功");
+                    Ok(AgentToolResult::json(json!({
+                        "expression": expr,
+                        "result": value,
+                    })))
+                }
                 Err(CalcError::InvalidArguments(msg)) => {
                     // 参数问题：报成工具错误，模型能读到并自我纠正。
+                    warn!(expression = %expr, error = %msg, "工具 calculate 参数不合法");
                     Err(ToolError::InvalidArguments(msg))
                 }
             }
@@ -78,6 +83,7 @@ fn counting_tool() -> Arc<dyn AgentTool> {
             let counter = counter.clone();
             async move {
                 let n = counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                debug!(calls = n, "工具 count_calls 被调用");
                 Ok(AgentToolResult::json(json!({ "calls": n })))
             }
         },
@@ -119,9 +125,10 @@ fn create_agent(with_hooks: bool) -> Result<Agent> {
             .with_before_tool_call(Arc::new(
                 |ctx: &mut BeforeToolCallContext, _cancel: CancellationToken| {
                     Box::pin(async move {
-                        println!(
-                            "  [middleware] before: {} args={}",
-                            ctx.tool_call.name, ctx.args
+                        info!(
+                            tool = %ctx.tool_call.name,
+                            args = %ctx.args,
+                            "middleware before_tool_call 触发"
                         );
 
                         // 例：把表达式里的空格去掉，减少解析失败
@@ -129,6 +136,7 @@ fn create_agent(with_hooks: bool) -> Result<Agent> {
                             && let Some(expr) = ctx.args.get("expression").and_then(|v| v.as_str())
                         {
                             let cleaned = expr.replace(' ', "");
+                            debug!(before = %expr, after = %cleaned, "已改写工具参数");
                             if let Some(obj) = ctx.args.as_object_mut() {
                                 obj.insert("expression".into(), Value::String(cleaned));
                             }
@@ -146,9 +154,10 @@ fn create_agent(with_hooks: bool) -> Result<Agent> {
             .with_after_tool_call(Arc::new(
                 |ctx: AfterToolCallContext, _cancel: CancellationToken| {
                     Box::pin(async move {
-                        println!(
-                            "  [middleware] after: {} is_error={}",
-                            ctx.tool_call.name, ctx.is_error
+                        info!(
+                            tool = %ctx.tool_call.name,
+                            is_error = ctx.is_error,
+                            "middleware after_tool_call 触发"
                         );
 
                         // 例：把成功结果统一加一个字段
@@ -168,6 +177,7 @@ fn create_agent(with_hooks: bool) -> Result<Agent> {
             ));
     }
 
+    info!(with_hooks, tool_count = 2, "Agent 已构造");
     Ok(Agent::new(config))
 }
 
@@ -191,6 +201,7 @@ pub async fn run_agent_demo() -> Result<()> {
             AgentEvent::ToolExecutionStart {
                 tool_name, args, ..
             } => {
+                info!(tool = %tool_name, args = %args, "事件：开始调用工具");
                 println!("\n  [事件] 开始调用工具 {tool_name} args={args}");
             }
             AgentEvent::ToolExecutionEnd {
@@ -199,12 +210,18 @@ pub async fn run_agent_demo() -> Result<()> {
                 is_error,
                 ..
             } => {
+                if is_error {
+                    warn!(tool = %tool_name, "事件：工具执行失败");
+                } else {
+                    info!(tool = %tool_name, "事件：工具执行结束");
+                }
                 println!(
                     "  [事件] 工具 {tool_name} 结束 error={is_error} result={}",
                     result.details
                 );
             }
             AgentEvent::TurnEnd { tool_results, .. } => {
+                info!(tool_result_count = tool_results.len(), "事件：本轮结束");
                 println!("  [事件] 本轮结束，工具结果 {} 条", tool_results.len());
             }
             _ => {}
@@ -218,6 +235,11 @@ pub async fn run_agent_demo() -> Result<()> {
 
     // 打印 agent 状态：历史消息累积在这里。
     let state = agent.state();
+    info!(
+        message_count = state.messages.len(),
+        tool_count = state.tools.len(),
+        "Agent 运行结束"
+    );
     println!("\n--- Agent 状态 ---");
     println!("消息条数: {}", state.messages.len());
     println!("工具数: {}", state.tools.len());
@@ -266,6 +288,7 @@ pub async fn run_hooks_demo() -> Result<()> {
     });
 
     // 故意带空格，验证 before 钩子的参数改写生效。
+    info!("发起 Agent 提示（验证 before 钩子的参数改写）");
     agent.prompt("计算 ( 12 + 34 ) * 2").await?;
     println!();
 
@@ -273,6 +296,7 @@ pub async fn run_hooks_demo() -> Result<()> {
     let state = agent.state();
     for msg in &state.messages {
         if let AgentMessage::ToolResult(m) = msg {
+            debug!(tool = %m.tool_name, details = %m.details, "工具结果");
             println!("\n工具结果详情: {}", m.details);
         }
     }
@@ -306,6 +330,7 @@ pub async fn run_http_middleware_demo() -> Result<()> {
                 .and_then(|m| m.as_array())
                 .map(|a| a.len())
                 .unwrap_or(0);
+            debug!(model = %model, message_count = msg_count, "on_payload 触发");
             println!("  [on_payload] model={model} messages={msg_count}");
 
             // 返回 Some 替换请求体：这里注入一个自定义字段做演示。
@@ -317,12 +342,18 @@ pub async fn run_http_middleware_demo() -> Result<()> {
         })
     });
 
-    let on_response: rust_genai_agent::OnResponseHook = Arc::new(|info, model| {
+    let on_response: rust_genai_agent::OnResponseHook = Arc::new(|resp_info, model| {
         Box::pin(async move {
-            let req_id = info.header("x-request-id").unwrap_or("-");
+            let req_id = resp_info.header("x-request-id").unwrap_or("-");
+            info!(
+                model = %model,
+                status = resp_info.status,
+                request_id = %req_id,
+                "on_response 触发"
+            );
             println!(
                 "  [on_response] model={model} status={} x-request-id={req_id}",
-                info.status
+                resp_info.status
             );
         })
     });
@@ -392,19 +423,32 @@ pub async fn run_state_demo() -> Result<()> {
     // 第一轮
     agent.prompt("我叫 Rodriguez。").await?;
     println!();
+    info!(
+        message_count = agent.state().messages.len(),
+        "状态 demo 第 1 轮结束"
+    );
     println!("  [状态] 消息数 = {}", agent.state().messages.len());
 
     // 第二轮：agent 记得上一轮说了什么
     agent.prompt("我叫什么名字？").await?;
     println!();
+    info!(
+        message_count = agent.state().messages.len(),
+        "状态 demo 第 2 轮结束"
+    );
     println!("  [状态] 消息数 = {}", agent.state().messages.len());
 
     // 运行时改系统提示
     agent.set_system_prompt("你是一个只用一句话回答的助手。");
+    info!("运行时已修改系统提示词");
     println!("  [状态] 新系统提示 = {}", agent.state().system_prompt);
 
     // 重置：清空历史
     agent.reset()?;
+    info!(
+        message_count = agent.state().messages.len(),
+        "reset 后消息数"
+    );
     println!("  [状态] reset 后消息数 = {}", agent.state().messages.len());
 
     drop(subscription);

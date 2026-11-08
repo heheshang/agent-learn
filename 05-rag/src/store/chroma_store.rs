@@ -52,6 +52,7 @@
 
 use std::path::Path;
 
+use agent_logging::{debug, info, warn};
 use chromadb::client::{ChromaClient, ChromaClientOptions};
 use chromadb::collection::{ChromaCollection, CollectionEntries, GetOptions, QueryOptions};
 use serde_json::json;
@@ -123,6 +124,14 @@ impl ChromaStore {
             .await
             .map_err(|e| StoreError::Chroma(e.to_string()))?;
 
+        info!(
+            endpoint = %endpoint,
+            collection = %collection_name,
+            dimension,
+            count,
+            "Chroma 集合已连接"
+        );
+
         Ok(Self {
             client,
             collection,
@@ -162,11 +171,18 @@ impl ChromaStore {
         filter: Option<serde_json::Value>,
     ) -> Result<Vec<SearchHit>, StoreError> {
         if query.len() != self.dimension {
+            warn!(
+                expected = self.dimension,
+                actual = query.len(),
+                "Chroma 查询向量维度不匹配"
+            );
             return Err(StoreError::DimensionMismatch {
                 expected: self.dimension,
                 actual: query.len(),
             });
         }
+
+        debug!(k, filtered = filter.is_some(), "发起 Chroma 检索");
 
         let result = self
             .collection
@@ -183,11 +199,14 @@ impl ChromaStore {
             .await
             .map_err(|e| StoreError::Chroma(e.to_string()))?;
 
-        Ok(hits_from_query_result(&result))
+        let hits = hits_from_query_result(&result);
+        debug!(hit_count = hits.len(), "Chroma 检索完成");
+        Ok(hits)
     }
 
     /// 删除整个集合。
     pub async fn drop_collection(&self) -> Result<(), StoreError> {
+        info!(collection = %self.collection_name, "删除 Chroma 集合");
         self.client
             .delete_collection(&self.collection_name)
             .await
@@ -380,6 +399,13 @@ impl VectorStore for ChromaStore {
             .count()
             .await
             .map_err(|e| StoreError::Chroma(e.to_string()))?;
+
+        info!(
+            written = chunks.len(),
+            server_count = self.cached_count,
+            collection = %self.collection_name,
+            "Chroma 写入完成"
+        );
 
         Ok(())
     }

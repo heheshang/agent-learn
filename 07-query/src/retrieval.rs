@@ -23,6 +23,7 @@
 //!
 //! [`EmbedMode`] 明确告诉检索器「这一路查询该用哪种方式嵌入」。
 
+use agent_logging::{debug, warn};
 use std::sync::Arc;
 
 use rag_05::embed::Embedder;
@@ -145,6 +146,7 @@ impl MultiQueryRetriever {
     ) -> QueryResult<Vec<RetrievedChunk>> {
         let query = query.trim();
         if query.is_empty() {
+            warn!("检索查询为空");
             return Err(QueryError::BadRequest("查询不能为空".to_string()));
         }
 
@@ -157,7 +159,19 @@ impl MultiQueryRetriever {
             .map_err(|e| QueryError::Retrieval(format!("向量检索失败: {e}")))?;
         drop(guard);
 
-        Ok(hits.iter().enumerate().map(|(rank, hit)| to_chunk(rank, hit)).collect())
+        debug!(
+            query = %query,
+            mode = ?mode,
+            k,
+            hit_count = hits.len(),
+            "单路检索完成"
+        );
+
+        Ok(hits
+            .iter()
+            .enumerate()
+            .map(|(rank, hit)| to_chunk(rank, hit))
+            .collect())
     }
 
     /// 并发检索多路，返回每路的结果。
@@ -181,6 +195,7 @@ impl MultiQueryRetriever {
         }
 
         // 1. 并发嵌入。
+        debug!(query_count = queries.len(), k, "开始并发嵌入");
         let mut tasks = Vec::with_capacity(queries.len());
         for (text, mode, _) in queries {
             let embedder = Arc::clone(&self.embedder);
@@ -216,6 +231,13 @@ impl MultiQueryRetriever {
                 .map(|(rank, hit)| to_chunk(rank, hit))
                 .collect();
 
+            debug!(
+                query = %text,
+                hit_count = chunks.len(),
+                top_score = chunks.first().map(|c| c.score),
+                "一路检索完成"
+            );
+
             runs.push(RankedRun::new(text.clone(), *strategy, chunks));
         }
 
@@ -238,11 +260,7 @@ impl MultiQueryRetriever {
 }
 
 /// 按指定模式嵌入一段文本。
-fn embed_text(
-    embedder: &dyn Embedder,
-    text: &str,
-    mode: EmbedMode,
-) -> QueryResult<Vec<f32>> {
+fn embed_text(embedder: &dyn Embedder, text: &str, mode: EmbedMode) -> QueryResult<Vec<f32>> {
     match mode {
         EmbedMode::Query => embedder
             .embed_query(text)
@@ -311,10 +329,7 @@ mod tests {
 
     #[test]
     fn hyde_uses_document_mode() {
-        assert_eq!(
-            EmbedMode::for_strategy(Strategy::Hyde),
-            EmbedMode::Document
-        );
+        assert_eq!(EmbedMode::for_strategy(Strategy::Hyde), EmbedMode::Document);
     }
 
     #[test]
