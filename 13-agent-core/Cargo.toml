@@ -1,0 +1,43 @@
+[package]
+name = "agent-13"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+agent-logging = { path = "../00-logging" }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+
+# ── HTTP API 层 ──────────────────────────────────────────────────────
+# 与 06~12 保持同一套模式：路由 → 处理器 → 状态 → 统一错误响应。
+axum = { workspace = true }
+tower-http = { workspace = true }
+
+# ── LLM 层 ──────────────────────────────────────────────────────────
+# genai：多厂商 LLM 客户端。
+#
+# ⚠️ 用的是 AgentPrism fork（crates.io 上叫 `genai-agentprism`，
+#    lib 名仍是 `genai`）—— 和 03/06/07/08 用的是**同一个包**，
+#    类型才能互通。
+genai = { workspace = true }
+
+# ── 复用 Part 1（加载 + 分割）──────────────────────────────────────────
+# - `rag_04::splitter::SplitterConfig` —— 建 BM25 索引时要用同一套分块配置
+rag-04 = { path = "../04-rag" }
+
+# ── 复用 Part 4（查询改写）───────────────────────────────────────────
+# - `rag_07::llm`  —— `Llm` trait + `GenaiLlm` + `ScriptedLlm`
+#                    （ScriptedLlm 让整个 Agent 循环能被**确定性测试**）
+rag-07 = { path = "../07-query" }
+
+# ── 复用 Part 5（混合检索）───────────────────────────────────────────
+# - `rag_08::bm25`    —— BM25 倒排索引（`search` 工具的底层）
+# - `rag_08::index`   —— `build_bm25`（从知识库目录建索引，不依赖嵌入模型）
+# - `rag_08::tokenize`—— CJK 分词
+rag-08 = { path = "../08-rag" }
+
+[dev-dependencies]
+tempfile = { workspace = true }

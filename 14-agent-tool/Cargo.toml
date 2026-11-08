@@ -1,0 +1,52 @@
+[package]
+name = "agent-14"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+agent-logging = { path = "../00-logging" }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+
+# ── HTTP API 层 ──────────────────────────────────────────────────────
+# 与 06~13 保持同一套模式：路由 → 处理器 → 状态 → 统一错误响应。
+axum = { workspace = true }
+tower-http = { workspace = true }
+
+# ── LLM 层 ──────────────────────────────────────────────────────────
+genai = { workspace = true }
+
+# ── 天气后端 HTTP 客户端 ─────────────────────────────────────────────
+# Open-Meteo 的地理编码 + 预报接口都免 API key，
+# 但仍然需要真实的 HTTP 客户端 —— 这正是「自定义工具」与
+# 13 里 BM25 工具的根本差别：**工具要能等待 I/O**。
+reqwest = { workspace = true }
+
+# ── 复用 13-agent-core ──────────────────────────────────────────────
+# - `agent_13::agent::parse_react_output` —— ReAct 输出解析器
+#   （含「模型回显整个提示词」那个坑的修复：找**最后一个**标记）
+# - `agent_13::tools::SearchTool` —— 本地 BM25 检索工具（同步的）
+# - `agent_13::tools::build_index` —— 从知识库目录建 BM25 索引
+agent-13 = { path = "../13-agent-core" }
+
+# ── 复用 07-query（LLM 抽象）──────────────────────────────────────────
+# `Llm` trait 的 `chat()` 返回 `rag_07::error::QueryError`，
+# 所以本项目的 `AppError` 需要能从它转换过来。
+rag-07 = { path = "../07-query" }
+
+# ── 复用 04-rag（分块配置）───────────────────────────────────────────
+# `build_bm25` 用它来保证分块口径与向量索引一致。
+rag-04 = { path = "../04-rag" }
+
+# ── 复用 08-rag（BM25）────────────────────────────────────────────────
+rag-08 = { path = "../08-rag" }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+# 测试 HTTP API 层时用 `tower::ServiceExt::oneshot` 直接调路由 ——
+# 不开端口，零 IO 开销。
+tower = { workspace = true }
