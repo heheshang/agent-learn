@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["01-axum", "02-rig", "03-genai", "04-rag", "05-rag", "06-rag", "07-query", "08-rag", "09-rag-eval", "10-rag-milvus", "11-rag-advance", "12-rag-summary"]
+members = ["00-logging", "01-axum", "02-rig", "03-genai", "04-rag", "05-rag", "06-rag", "07-query", "08-rag", "09-rag-eval", "10-rag-milvus", "11-rag-advance", "12-rag-summary", "13-agent-core", "14-agent-tool"]
 
 # 所有成员 crate 的依赖都在这里统一定义，成员用 `dep = { workspace = true }` 引用。
 # 版本与 feature 只在此处出现一处，避免各模块之间版本漂移。
@@ -11,6 +11,16 @@ thiserror = "2.0.17"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 tokio = { version = "1.54.1", features = ["full"] }
+
+# ── 00-logging（workspace 共享日志设施）───────────────────────────────
+# tracing：结构化日志的「发射端」——所有 `info!` / `debug!` 宏都来自它。
+#
+# tracing-subscriber：「接收端」——负责把事件格式化后输出。
+# `env-filter` feature 提供 `EnvFilter`，让 `RUST_LOG` 环境变量
+# 能按模块粒度过滤级别（这是 `println!` 做不到的）。
+# `fmt` feature 提供 `fmt::Layer`；`chrono` feature 提供本地时区时间戳。
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt", "ansi", "chrono"] }
 
 # ── 01-axum / 06-rag ───────────────────────────────────────────────
 # `macros` feature 提供 `#[axum::debug_handler]` —— 写 handler 时它能

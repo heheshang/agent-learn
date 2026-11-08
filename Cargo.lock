@@ -40,6 +40,59 @@ dependencies = [
 ]
 
 [[package]]
+name = "agent-13"
+version = "0.1.0"
+dependencies = [
+ "agent-logging",
+ "anyhow",
+ "axum",
+ "genai-agentprism",
+ "rag-04",
+ "rag-07",
+ "rag-08",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tower-http",
+]
+
+[[package]]
+name = "agent-14"
+version = "0.1.0"
+dependencies = [
+ "agent-13",
+ "agent-logging",
+ "anyhow",
+ "axum",
+ "genai-agentprism",
+ "rag-04",
+ "rag-07",
+ "rag-08",
+ "reqwest 0.11.27",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tower",
+ "tower-http",
+]
+
+[[package]]
+name = "agent-logging"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "serde_json",
+ "tokio",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "ahash"
 version = "0.8.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -639,6 +692,7 @@ dependencies = [
 name = "axum-01"
 version = "0.1.0"
 dependencies = [
+ "agent-logging",
  "axum",
  "serde",
  "serde_json",
@@ -3035,6 +3089,7 @@ dependencies = [
 name = "genai-03"
 version = "0.1.0"
 dependencies = [
+ "agent-logging",
  "anyhow",
  "genai-agentprism",
  "rust-genai-agent",
@@ -6425,6 +6480,7 @@ checksum = "dc33ff2d4973d518d823d61aa239014831e521c75da58e3df4840d3f47749d09"
 name = "rag-04"
 version = "0.1.0"
 dependencies = [
+ "agent-logging",
  "anyhow",
  "docling",
  "pdf-extract",
@@ -6440,6 +6496,7 @@ dependencies = [
 name = "rag-05"
 version = "0.1.0"
 dependencies = [
+ "agent-logging",
  "anyhow",
  "chromadb",
  "faiss",
@@ -6456,6 +6513,7 @@ dependencies = [
 name = "rag-06"
 version = "0.1.0"
 dependencies = [
+ "agent-logging",
  "anyhow",
  "axum",
  "genai-agentprism",
@@ -6473,6 +6531,7 @@ dependencies = [
 name = "rag-07"
 version = "0.1.0"
 dependencies = [
+ "agent-logging",
  "anyhow",
  "axum",
  "genai-agentprism",
@@ -6491,6 +6550,7 @@ dependencies = [
 name = "rag-08"
 version = "0.1.0"
 dependencies = [
+ "agent-logging",
  "anyhow",
  "axum",
  "fastembed",
@@ -6512,6 +6572,7 @@ dependencies = [
 name = "rag-09"
 version = "0.1.0"
 dependencies = [
+ "agent-logging",
  "anyhow",
  "axum",
  "rag-04",
@@ -6531,6 +6592,7 @@ dependencies = [
 name = "rag-10"
 version = "0.1.0"
 dependencies = [
+ "agent-logging",
  "anyhow",
  "axum",
  "milvus-sdk-rust",
@@ -6551,6 +6613,7 @@ dependencies = [
 name = "rag-11"
 version = "0.1.0"
 dependencies = [
+ "agent-logging",
  "anyhow",
  "axum",
  "base64 0.22.1",
@@ -6573,6 +6636,7 @@ dependencies = [
 name = "rag-12"
 version = "0.1.0"
 dependencies = [
+ "agent-logging",
  "anyhow",
  "axum",
  "milvus-sdk-rust",
@@ -7099,6 +7163,7 @@ dependencies = [
 name = "rig-02"
 version = "0.1.0"
 dependencies = [
+ "agent-logging",
  "anyhow",
  "rig",
  "serde",
@@ -8958,6 +9023,7 @@ version = "0.3.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cb7f578e5945fb242538965c2d0b04418d38ec25c79d160cd279bf0731c8d319"
 dependencies = [
+ "chrono",
  "matchers",
  "nu-ansi-term",
  "once_cell",

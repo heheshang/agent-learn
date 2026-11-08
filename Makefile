@@ -11,15 +11,16 @@
 # ============================================================================
 
 CARGO := cargo
-PKGS  := axum-01 rig-02 genai-03 rag-04 rag-05 rag-06 rag-07 rag-08 rag-09 rag-10 rag-11 rag-12
+PKGS  := axum-01 rig-02 genai-03 rag-04 rag-05 rag-06 rag-07 rag-08 rag-09 rag-10 rag-11 rag-12 agent-13 agent-14
 
 .DEFAULT_GOAL := help
-.PHONY: help build run test check fmt fmt-check lint clean \
-        01 02 03 04 05 06 07 08 09 10 11 12 \
-        axum rig genai rag \
-        serve-06 serve-07 serve-08 serve-09 serve-10 serve-11 serve-12 \
-        demo-04 demo-05 demo-06 demo-07 demo-08 demo-09 demo-10 demo-11 demo-12 \
-        compare-07 compare-08 compare-09 compare-10 compare-11 compare-12 \
+.PHONY: help build run test check fmt fmt-check lint clean logs \
+        01 02 03 04 05 06 07 08 09 10 11 12 13 14 \
+        axum rig genai rag agent \
+        serve-06 serve-07 serve-08 serve-09 serve-10 serve-11 serve-12 serve-13 serve-14 \
+        demo-04 demo-05 demo-06 demo-07 demo-08 demo-09 demo-10 demo-11 demo-12 demo-13 demo-14 \
+        compare-07 compare-08 compare-09 compare-10 compare-11 compare-12 compare-13 compare-14 \
+        call-14 \
         eval-12 \
         milvus-up milvus-down milvus-destroy \
         check-mermaid \
@@ -51,6 +52,16 @@ fmt-check: ## 检查格式
 
 lint: ## clippy 全量检查（零警告门槛）
 	$(CARGO) clippy --workspace --all-targets -- -D warnings
+
+logs: ## 打印日志过滤示例（用 RUST_LOG 控制各项目日志级别）
+	@echo "日志约定：全仓库统一走 00-logging（agent-logging）"
+	@echo ""
+	@echo "  全局 info        ：RUST_LOG=info"
+	@echo "  单项目 debug     ：RUST_LOG=debug,rag_06=debug"
+	@echo "  单模块 trace     ：RUST_LOG=info,rag_12::retriever=trace"
+	@echo "  只看告警         ：RUST_LOG=warn"
+	@echo ""
+	@echo "  例：RUST_LOG=debug make serve-12"
 
 clean: ## 清理构建产物
 	$(CARGO) clean
@@ -93,10 +104,17 @@ clean: ## 清理构建产物
 12: ## 12-rag-summary：端到端 demo
 	$(MAKE) -C 12-rag-summary demo
 
+13: ## 13-agent-core：跑一次 Agent（ReAct）
+	$(MAKE) -C 13-agent-core run
+
+14: ## 14-agent-tool：直接调天气工具（不经模型）
+	$(MAKE) -C 14-agent-tool call
+
 axum: 01 ## 别名
 rig: 02 ## 别名
 genai: 03 ## 别名
 rag: 04 ## 别名
+agent: 13 ## 别名
 
 ## ── 服务 ────────────────────────────────────────────────────────────────
 
@@ -120,6 +138,15 @@ serve-11: ## 启动 11-rag-advance 服务（:3040）
 
 serve-12: ## 启动 12-rag-summary 服务（:3050）
 	$(MAKE) -C 12-rag-summary serve
+
+serve-13: ## 启动 13-agent-core 服务（:3060）
+	$(MAKE) -C 13-agent-core serve
+
+serve-14: ## 启动 14-agent-tool 服务（:3070）
+	$(MAKE) -C 14-agent-tool serve
+
+mcp-14: ## 启动 14-agent-tool 内置 MCP 服务器（:3071）
+	$(MAKE) -C 14-agent-tool mcp
 
 ## ── Demo ────────────────────────────────────────────────────────────────
 
@@ -150,6 +177,15 @@ demo-11: ## 11-rag-advance：解析复杂文档
 demo-12: ## 12-rag-summary：摘要式问答
 	$(MAKE) -C 12-rag-summary demo
 
+demo-13: ## 13-agent-core：跑一次 Agent（ReAct）
+	$(MAKE) -C 13-agent-core run
+
+demo-14: ## 14-agent-tool：直接调天气工具
+	$(MAKE) -C 14-agent-tool call
+
+call-14: ## 14-agent-tool：直接调天气工具（不经模型）★
+	$(MAKE) -C 14-agent-tool call
+
 compare-07: ## 07-query：多策略改写对比 ★
 	$(MAKE) -C 07-query compare
 
@@ -167,6 +203,12 @@ compare-11: ## 11-rag-advance：几何还原 vs 压平对照 ★
 
 compare-12: ## 12-rag-summary：五档消融阶梯同题对照 ★
 	$(MAKE) -C 12-rag-summary compare
+
+compare-13: ## 13-agent-core：三模式消融对照（direct/act_only/react）★
+	$(MAKE) -C 13-agent-core compare
+
+compare-14: ## 14-agent-tool：三模式消融对照（工具贡献量化）★
+	$(MAKE) -C 14-agent-tool compare
 
 eval-12: ## 12-rag-summary：跑评估集出消融报告 ★
 	$(MAKE) -C 12-rag-summary eval
