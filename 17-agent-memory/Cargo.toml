@@ -1,0 +1,52 @@
+[package]
+name = "agent-17"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+agent-logging = { path = "../00-logging" }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+chrono = { workspace = true }
+
+# ── HTTP API 层 ──────────────────────────────────────────────────────
+# 与 06~16 保持同一套模式：路由 → 处理器 → 状态 → 统一错误响应。
+axum = { workspace = true }
+tower-http = { workspace = true }
+
+# ── LLM 层 ──────────────────────────────────────────────────────────
+# genai 提供原生消息类型（`ChatMessage` / `ChatRole` / `ContentPart`）。
+#
+# ⚠️ 本项目**复用 16 的结构化工具调用**（`FunctionLlm` / `ToolRegistry`）——
+#    因为 LangChain 的 short-term memory 文档本身就是**消息数组**语义
+#    （`AgentState.messages`），而结构化协议的消息数组天然就是「会话状态」。
+genai = { workspace = true }
+
+# ── 复用 16-agent-function-calling（结构化工具调用基础设施）────────
+# - `agent_16::llm::FunctionLlm` / `GenaiFunctionLlm` / `ScriptedFunctionLlm`
+# - `agent_16::tool::ToolRegistry` / `ToolSpec` / `FunctionTool` / `ToolContext`
+# - `agent_16::functions::WeatherTool` / `KnowledgeTool` / `CalculateTool`
+#
+# ⚠️ 复用它而不是重写，是为了**继承 16 踩过的坑**：
+#    「每个 tool_call 都必须有回执」「reasoning 必须回传」
+#    「strict 不能替代本地校验」—— 这些约束在 16 的工具层已经实现了。
+agent-16 = { path = "../16-agent-function-calling" }
+
+# ── 复用 08-rag（BM25 索引 + 分词）──────────────────────────────────
+# - `rag_08::bm25::Bm25Index` —— 长期记忆的关键词检索
+# - `rag_08::tokenize::tokenize` —— 中英混排分词（记忆文本分词）
+rag-08 = { path = "../08-rag" }
+
+# ── 复用 04-rag（分块配置）───────────────────────────────────────────
+# `build_bm25` 用它来保证知识库分块口径与向量索引一致。
+rag-04 = { path = "../04-rag" }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+# 测试 HTTP API 层时用 `tower::ServiceExt::oneshot` 直接调路由 ——
+# 不开端口，零 IO 开销。
+tower = { workspace = true }

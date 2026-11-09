@@ -1,0 +1,47 @@
+[package]
+name = "agent-18"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+agent-logging = { path = "../00-logging" }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+
+# ── HTTP API 层 ──────────────────────────────────────────────────────
+# 与 06~17 保持同一套模式：路由 → 处理器 → 状态 → 统一错误响应。
+axum = { workspace = true }
+tower-http = { workspace = true }
+
+# ── LLM 层 ──────────────────────────────────────────────────────────
+# 复用 16 的结构化工具调用协议（tools 字段 + tool_calls）——
+# 错误处理发生在「工具调用」这一层，所以必须用结构化协议，
+# 才能精确知道「哪个 call_id 的哪个工具失败了」。
+genai = { workspace = true }
+
+# ── 复用 16-agent-function-calling ──────────────────────────────────
+# - `agent_16::llm::FunctionLlm` / `GenaiFunctionLlm` / `ScriptedFunctionLlm`
+# - `agent_16::llm::ToolChoiceMode` —— tool_choice 四档
+# - `agent_16::tools::ToolSpec` —— 工具定义（含 strict）
+#
+# ⚠️ 复用它而不是重写，是为了**继承 16 踩过的坑**：
+#    「每个 tool_call 都必须有回执」「reasoning 必须回传」
+#    「strict 不能替代本地校验」—— 这些约束在 16 的循环里已经实现了。
+agent-16 = { path = "../16-agent-function-calling" }
+
+# ── 复用 14-agent-tool（JSON Schema 子集校验器）─────────────────────
+# `agent_14::schema::validate` —— 工具契约的本地兜底。
+#
+# ⚠️ Schema 校验失败属于**业务失败**（调用方参数错了），
+#    不是可重试错误 —— 这一点在 error.rs 的分类表里有断言锁住。
+agent-14 = { path = "../14-agent-tool" }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+# 测试 HTTP API 层时用 `tower::ServiceExt::oneshot` 直接调路由 ——
+# 不开端口，零 IO 开销。
+tower = { workspace = true }
