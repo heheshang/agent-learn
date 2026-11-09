@@ -1,0 +1,79 @@
+[package]
+name = "agent-19"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+agent-logging = { path = "../00-logging" }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+chrono = { workspace = true }
+
+# ── HTTP API 层 ──────────────────────────────────────────────────────
+# 与 06~18 保持同一套模式：路由 → 处理器 → 状态 → 统一错误响应。
+axum = { workspace = true }
+tower-http = { workspace = true }
+
+# ── LLM 层 ──────────────────────────────────────────────────────────
+# 复用 18 的结构化工具调用协议（tools 字段 + tool_calls），
+# 本项目的核心产出是「多工具编排 + 证据聚合」，不需要文本协议。
+genai = { workspace = true }
+
+# ── Web 搜索 / 抓取 ─────────────────────────────────────────────────
+# Web 搜索与网页抓取都需要真实的 HTTP 客户端。
+reqwest = { workspace = true }
+
+# ── 复用 18-agent-error ─────────────────────────────────────────────
+# - `agent_18::tool::ErrorAwareTool` / `ToolRegistry` / `ToolOutcome`
+#   —— 声明失败类别的工具 + 分发注册表
+# - `agent_18::middleware::ErrorHandlingMiddleware`
+#   —— 重试 / 降级 / 终止的决策中枢（本项目**核心**）
+# - `agent_18::llm::FunctionLlm` / `ScriptedLlm` —— LLM 抽象 + 脚本替身
+# - `agent_18::error::ErrorCode` / `ErrorKind` / `ToolError`
+#
+# ⚠️ 复用它而不是重写，是为了**继承 18 踩过的坑**：
+#    「Business 错误不重试」「Fatal 不降级」
+#    「每个 tool_call 都必须有回执」「模型调用失败不能降级」。
+agent-18 = { path = "../18-agent-error" }
+
+# ── 复用 16-agent-function-calling ──────────────────────────────────
+# - `agent_16::tools::ToolSpec` —— 工具定义（含 strict 标志）
+# - `agent_16::llm::ToolChoiceMode` —— tool_choice 四档
+agent-16 = { path = "../16-agent-function-calling" }
+
+# ── 复用 14-agent-tool（JSON Schema 子集校验器）─────────────────────
+# Schema 校验失败属于**业务失败**，不是可重试错误。
+agent-14 = { path = "../14-agent-tool" }
+
+# ── 复用 08-rag（BM25 倒排索引）──────────────────────────────────────
+# - `rag_08::bm25::Bm25Index` —— 本地知识库检索（RAG 侧）
+# - `rag_08::index::build_bm25` —— 从知识库目录建索引
+rag-08 = { path = "../08-rag" }
+
+# ── 复用 04-rag（分块配置）───────────────────────────────────────────
+# `build_bm25` 用它来保证分块口径与向量索引一致。
+rag-04 = { path = "../04-rag" }
+
+# ── 复用 13-agent-core（工具文本协议，本项目不用）────────────────────
+# 这里只为了复用 13 的 `calculate`（手写算术求值器）—— 周报统计要用。
+agent-13 = { path = "../13-agent-core" }
+
+# ── 复用 17-agent-memory（长期记忆）────────────────────────────────
+# - `agent_17::longterm::MemoryStore` —— 事实存储（同 key 合并、旧值进 versions）
+# - `agent_17::longterm::MemoryRetriever` —— BM25 事实召回
+# - `agent_17::longterm::MemoryFact` —— 事实模型
+#
+# ⚠️ 复用它是为了**继承 17 的坑**：
+#    「事实只进 system 提示，不进消息数组」
+#    「同 (owner, subject, predicate) 合并，旧值进 versions」。
+agent-17 = { path = "../17-agent-memory" }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+# 测试 HTTP API 层时用 `tower::ServiceExt::oneshot` 直接调路由 ——
+# 不开端口，零 IO 开销。
+tower = { workspace = true }
