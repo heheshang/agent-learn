@@ -38,6 +38,17 @@ target/
 # ── 评估报告（每次跑都重写，且体积大）────────────────────────────────────
 09-rag-eval/reports/
 
+# ── 20-agent-preformence-analysis 的 Python 侧产物 ─────────────────────
+#
+# ⚠️ `.venv/` 里有几万个文件（site-packages），
+#    索引它们会严重拖慢 Cursor 的文件搜索。
+#    `reports/` 每次跑都变，索引也没意义。
+20-agent-preformence-analysis/profiler/.venv/
+20-agent-preformence-analysis/profiler/reports/
+20-agent-preformence-analysis/profiler/.pytest_cache/
+20-agent-preformence-analysis/perf-out/
+__pycache__/
+
 # ── 二进制与非源码 ──────────────────────────────────────────────────────
 # git bundle —— 保留在仓库里，但 Cursor 索引它没有意义。
 .legacy-git-history/

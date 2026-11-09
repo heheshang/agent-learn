@@ -1,0 +1,61 @@
+[package]
+name = "agent-21"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+agent-logging = { path = "../00-logging" }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+
+# ── HTTP API 层 ──────────────────────────────────────────────────────
+axum = { workspace = true }
+tower-http = { workspace = true }
+
+# ── LLM 层 ──────────────────────────────────────────────────────────
+genai = { workspace = true }
+
+# ── Redis 客户端 ────────────────────────────────────────────────────
+# `tokio-comp` 提供基于 tokio 的异步连接（`redis::aio::MultiplexedConnection`）。
+#
+# ⚠️ 为什么用 `MultiplexedConnection` 而不是 `ConnectionManager`：
+# `ConnectionManager` 会自动重连，但它内部多一层状态机，
+# 而本项目要的是「**缓存挂了不能拖垮 Agent**」——
+# 降级逻辑由我们自己控制（`cache/mod.rs` 的 `degrade` 路径），
+# 不依赖连接管理器的重连语义。
+#
+# `MultiplexedConnection` 是**单连接多路复用**：所有命令走一条 TCP 连接，
+# 顺序执行。本项目的缓存读写都是「一问一答」，用不上流水线，
+# 简单可靠比吞吐更重要。
+redis = { version = "1.8.1", default-features = false, features = [
+    "tokio-comp",
+] }
+
+# ── 缓存键哈希 ──────────────────────────────────────────────────────
+# SHA-256：把「请求内容」压成固定长度的十六进制串，用作 Redis key。
+#
+# ⚠️ 为什么不用 `DefaultHasher`（`std::collections::hash_map::DefaultHasher`）：
+# 它的输出**不保证跨进程/跨版本稳定**（Rust 明确声明不保证），
+# 而且不同 `RandomState` 的 seed 不同 —— 重启一次所有缓存键全变，
+# 缓存永远命中不了。用 SHA-256 是**内容寻址**，重启后键不变。
+sha2 = { workspace = true }
+
+# ── 复用 16-agent-function-calling（结构化工具调用协议）────────────
+# 本项目的**缓存对象**就是「Function Calling 的一轮 LLM 响应」，
+# 所以直接复用 16 的协议层：
+# - `agent_16::llm::FunctionLlm` / `GenaiFunctionLlm` / `ScriptedFunctionLlm`
+# - `agent_16::tool::ToolRegistry` / `ToolOutcome` / `ToolContext`
+# - `agent_16::tools::ToolSpec`
+# - `agent_16::functions::default_registry`（三个工具）
+agent-16 = { path = "../16-agent-function-calling" }
+
+# ── 复用 13-agent-core / 08-rag / 04-rag（知识库索引）──────────────
+agent-13 = { path = "../13-agent-core" }
+rag-08 = { path = "../08-rag" }
+rag-04 = { path = "../04-rag" }
+
+[dev-dependencies]
+tower = { workspace = true }

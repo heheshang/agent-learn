@@ -65,6 +65,9 @@ def main() -> int:
     files = [ROOT / "README.md"]
     files += sorted(ROOT.glob("0*/README.md"))
     files += sorted(ROOT.glob("1*/README.md"))
+    # ⚠️ `2*` 也要扫 —— 20 号项目是 `20-agent-preformence-analysis`。
+    #    原来的 `0*` + `1*` 覆盖不到两位数目录。
+    files += sorted(ROOT.glob("2*/README.md"))
 
     total = 0
     for f in files:

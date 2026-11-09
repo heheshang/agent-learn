@@ -1,0 +1,45 @@
+[package]
+name = "agent-20"
+version = "0.1.0"
+edition = "2024"
+description = "性能瓶颈分析：用 cProfile / py-spy / Scalene 剖析 Agent 系统，并给出 Rust 侧的对照方案"
+
+[dependencies]
+agent-logging = { path = "../00-logging" }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+
+# ── 复用 08-rag（BM25 倒排索引）────────────────────────────────────
+# - `rag_08::bm25::Bm25Index` —— 本项目 Rust 侧的检索实现
+# - `rag_08::tokenize`           —— CJK 分词
+#
+# ⚠️ 复用它是为了让 Rust 侧与 Python 侧**做同一件事**：
+#    同样的语料、同样的 BM25 口径、同样的分词 ——
+#    这样两边的耗时差值可以归因到「语言与实现」，
+#    而不是「两边算法不一样」。
+rag-08 = { path = "../08-rag" }
+
+# ── Rust 侧剖析工具 ─────────────────────────────────────────────────
+#
+# ⚠️ 这两个 crate 是**Python 工具在 Rust 世界的对应物**：
+#
+# - `pprof`（tikv/pprof-rs）：采样型 CPU profiler，产出火焰图。
+#   它对应 py-spy 的角色 —— **采样、不改代码、低开销**。
+#
+# - `criterion`：统计学基准测试框架。
+#   它对应 cProfile 的角色 —— **确定性重复测量、给出统计量**，
+#   而且会自动告诉你「这个差值是不是显著」（不是拍脑袋）。
+#
+# ⚠️ 为什么**没有** Rust 版 Scalene：
+#   Scalene 的独有价值是「区分 Python 代码时间与 C 扩展时间」
+#   以及「内存分配追踪」。Rust 没有 GIL 也没有「Python 层 vs C 层」
+#   的区分，所以没有直接对应物 —— 最接近的是 `pprof` 的
+#   内存分配追踪（heap profiling）。
+pprof = { version = "0.15.0", features = ["flamegraph"] }
+criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
+
+[dev-dependencies]
+tempfile = { workspace = true }

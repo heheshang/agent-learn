@@ -1,0 +1,42 @@
+[project]
+name = "agent-perf-profiler"
+version = "0.1.0"
+description = "性能瓶颈分析实验台：cProfile / py-spy / scalene 剖析 Python Agent 系统"
+readme = "README.md"
+requires-python = ">=3.12"
+
+# ── 运行时依赖 ────────────────────────────────────────────────────────
+#
+# ⚠️ 本项目**故意保持零第三方运行时依赖**：
+#    剖析实验的核心变量是「被剖析代码本身」，引入第三方库会
+#    污染 profile（cProfile 会把每个库的 import 与调用都算进去）。
+#
+#    靶子里的 LLM 调用、BM25 检索、JSON 编解码全部手写实现 ——
+#    这既是「手撕」的仓库风格，也让 profile 干净到能一眼看出热点。
+dependencies = []
+
+# ── 开发依赖（剖析工具）────────────────────────────────────────────────
+#
+# ⚠️ 版本锁定说明：
+# - py-spy 0.4.3：支持 CPython 3.13，采样器实现稳定
+# - scalene 2.4.0：**CLI 在 2.x 改过** —— 旧写法是 `scalene <file>`，
+#   新写法是 `scalene run <file>`。照旧教程抄命令会直接打帮助文本。
+#
+# scalene 会额外拉 pydantic（它用 pydantic 解析 profile JSON），
+# 所以开发依赖比运行时依赖重得多。
+[dependency-groups]
+dev = [
+    "py-spy==0.4.3",
+    "scalene==2.4.0",
+    # ⚠️ pytest 是**开发依赖**不是运行时依赖 ——
+    #    放在这里是为了不让它污染 profile（见上面的 dependencies 说明）。
+    "pytest>=8.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.13,<0.13.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "agent_perf_profiler"
+module-root = "src"

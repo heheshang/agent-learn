@@ -21,6 +21,9 @@ members = [
     "17-agent-memory",
     "18-agent-error",
     "19-agent-summary",
+    "20-agent-preformence-analysis",
+    "21-agent-cache",
+    "22-agent-async",
 ]
 
 # 所有成员 crate 的依赖都在这里统一定义，成员用 `dep = { workspace = true }` 引用。
@@ -150,6 +153,14 @@ qdrant-client = "1.20.0"
 # 这里不是拿它做安全用途 —— 是借用它「确定性哈希」这一个性质。
 sha1 = "0.10"
 
+# SHA-256：缓存键的内容寻址哈希（21-agent-cache）。
+#
+# ⚠️ 不能用 `std::collections::hash_map::DefaultHasher`：
+# 它的输出**不保证跨进程/跨版本稳定**，而且 seed 随机 ——
+# 重启一次所有缓存键全变，缓存永远命中不了。
+# SHA-256 是**内容寻址**：同样的输入永远得到同样的键。
+sha2 = "0.10"
+
 # ── 15-agent-sql ───────────────────────────────────────────────────
 # rusqlite：SQLite 的 Rust 绑定。
 #
@@ -190,3 +201,19 @@ png = "0.17"
 
 # base64：把图片编码成 data URL，喂给支持多模态的 LLM。
 base64 = "0.22"
+
+# ── 22-agent-async ───────────────────────────────────────────────────
+# futures：本项目的**核心**依赖。
+#
+# 只开 `std`（不要 `async-await`）——
+# `async-await` feature 会给所有 future 加 `Send` 约束要求，
+# 而本项目需要的是**就地组合**的并发原语（`join_all` /
+# `FuturesUnordered` / `buffer_unordered`），它们在 `std` 下就够用。
+#
+# ⚠️ 为什么不用 `tokio::spawn`：
+#    `spawn` 要求 future 是 `'static`（不借用调用栈上的数据），
+#    而本项目的工具调用要借用 `&ToolRegistry` / `&str` 提示词，
+#    只能靠 `join_all` 这类**就地组合**的并发原语。
+futures = { version = "0.3.34", default-features = false, features = [
+    "std",
+] }

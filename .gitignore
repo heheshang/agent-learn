@@ -68,6 +68,22 @@ chroma-data/
 #    `data/reports/` 是**输出**，不入库。
 19-agent-summary/data/reports/
 
+# ── 20-agent-preformence-analysis 的 Python 侧产物 ─────────────────────
+#
+# ⚠️ 三个目录都是**可再生的**：
+# - `reports/`  剖析产物（跑一次 `make py-compare` 就重新生成）
+# - `.venv/`    uv 虚拟环境（`uv sync` 就重新生成）
+# - `__pycache__/` Python 字节码缓存
+#
+# 剖析产物尤其不该入库：它们**每次跑都不一样**（采样数、时间戳都会变），
+# 提交进去只会制造 diff 噪音。
+20-agent-preformence-analysis/profiler/reports/
+20-agent-preformence-analysis/profiler/.venv/
+20-agent-preformence-analysis/profiler/.pytest_cache/
+20-agent-preformence-analysis/perf-out/
+__pycache__/
+*.py[cod]
+
 # ── 本地环境与密钥 ──────────────────────────────────────────────────────
 .env
 .env.*

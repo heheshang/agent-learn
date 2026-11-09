@@ -11,17 +11,21 @@
 # ============================================================================
 
 CARGO := cargo
-PKGS  := axum-01 rig-02 genai-03 rag-04 rag-05 rag-06 rag-07 rag-08 rag-09 rag-10 rag-11 rag-12 agent-13 agent-14 agent-15 agent-16 agent-17 agent-18
+PKGS  := axum-01 rig-02 genai-03 rag-04 rag-05 rag-06 rag-07 rag-08 rag-09 rag-10 rag-11 rag-12 agent-13 agent-14 agent-15 agent-16 agent-17 agent-18 agent-19 agent-20 agent-21 agent-22
 
 .DEFAULT_GOAL := help
 .PHONY: help build run test check fmt fmt-check lint clean logs \
-        01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 18 \
+        01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 18 19 20 21 22 \
         axum rig genai rag agent \
-        serve-06 serve-07 serve-08 serve-09 serve-10 serve-11 serve-12 serve-13 serve-14 serve-15 serve-16 serve-17 serve-18 \
-        demo-04 demo-05 demo-06 demo-07 demo-08 demo-09 demo-10 demo-11 demo-12 demo-13 demo-14 demo-15 demo-16 demo-17 demo-18 \
-        compare-07 compare-08 compare-09 compare-10 compare-11 compare-12 compare-13 compare-14 compare-16 compare-17 compare-18 \
+        serve-06 serve-07 serve-08 serve-09 serve-10 serve-11 serve-12 serve-13 serve-14 serve-15 serve-16 serve-17 serve-18 serve-19 serve-21 serve-22 \
+        demo-04 demo-05 demo-06 demo-07 demo-08 demo-09 demo-10 demo-11 demo-12 demo-13 demo-14 demo-15 demo-16 demo-17 demo-18 demo-19 demo-21 demo-22 \
+        compare-07 compare-08 compare-09 compare-10 compare-11 compare-12 compare-13 compare-14 compare-16 compare-17 compare-18 compare-19 compare-21 compare-22 \
+        semantics-21 \
         call-14 guard-15 \
         eval-12 \
+        profile-20 pprof-20 bench-20 setup-20 py-compare \
+        redis-up-21 redis-down-21 \
+        bench-22 bench-real-22 modes-22 \
         milvus-up milvus-down milvus-destroy \
         check-mermaid check-toc \
         deps faiss chroma
@@ -125,6 +129,15 @@ clean: ## 清理构建产物
 19: ## 19-agent-summary：★ 接地校验对照（接地/部分接地/未接地）
 	$(MAKE) -C 19-agent-summary compare
 
+20: ## 20-agent-preformence-analysis：★ 三工具对比 + 优化前后差值
+	$(MAKE) -C 20-agent-preformence-analysis py-compare
+
+21: ## 21-agent-cache：★ 缓存命中演示（连跑两次同一问题）
+	$(MAKE) -C 21-agent-cache run2
+
+22: ## 22-agent-async：★ ★ ★ 并发对照实验（模拟负载）
+	$(MAKE) -C 22-agent-async bench
+
 axum: 01 ## 别名
 rig: 02 ## 别名
 genai: 03 ## 别名
@@ -174,6 +187,12 @@ serve-18: ## 启动 18-agent-error 服务（:3110）
 
 serve-19: ## 启动 19-agent-summary 服务（:3120）
 	$(MAKE) -C 19-agent-summary serve
+
+serve-21: ## 启动 21-agent-cache 服务（:3130）
+	$(MAKE) -C 21-agent-cache serve
+
+serve-22: ## 启动 22-agent-async 服务（:3140）
+	$(MAKE) -C 22-agent-async serve
 
 mcp-14: ## 启动 14-agent-tool 内置 MCP 服务器（:3071）
 	$(MAKE) -C 14-agent-tool mcp
@@ -234,6 +253,12 @@ demo-19-plan: ## 19-agent-summary：跑一次项目构建方案 ★
 search-19: ## 19-agent-summary：直接调 Web 搜索工具（不经模型）★
 	$(MAKE) -C 19-agent-summary search
 
+demo-21: ## 21-agent-cache：★ 连跑两次同一问题（演示缓存命中）
+	$(MAKE) -C 21-agent-cache run2
+
+demo-22: ## 22-agent-async：★ ★ ★ 并发对照实验（模拟负载）
+	$(MAKE) -C 22-agent-async bench
+
 call-14: ## 14-agent-tool：直接调天气工具（不经模型）★
 	$(MAKE) -C 14-agent-tool call
 
@@ -276,8 +301,59 @@ compare-18: ## 18-agent-error：三类错误对照（Transient/Business/Fatal）
 compare-19: ## 19-agent-summary：接地校验对照（接地/部分接地/未接地）★
 	$(MAKE) -C 19-agent-summary compare
 
+compare-21: ## 21-agent-cache：★ 缓存开 / 关对照实验
+	$(MAKE) -C 21-agent-cache compare
+
+semantics-21: ## 21-agent-cache：★ ★ 三档缓存语义对照（agentic 链路能否命中的定量实验）
+	$(MAKE) -C 21-agent-cache semantics
+
+# ── 22-agent-async 专属 ───────────────────────────────────────────────
+#
+# ⚠️ 对照实验分两种负载：
+#    - bench-22      模拟 I/O（sleep）—— 稳定、可复现，差值干净
+#    - bench-real-22 真实天气接口 —— 能看到真实网络下的抖动
+#
+#    两者都要跑：模拟负载给出「干净的加速比」，
+#    真实负载暴露「限流组可能反而更慢」这个反直觉现象。
+
+bench-22: ## 22-agent-async：★ ★ ★ 并发对照实验（模拟负载，稳）★
+	$(MAKE) -C 22-agent-async bench
+
+bench-real-22: ## 22-agent-async：★ ★ ★ 并发对照实验（真实天气接口）
+	$(MAKE) -C 22-agent-async bench-real
+
+modes-22: ## 22-agent-async：★ ★ 四种并发模式说明
+	$(MAKE) -C 22-agent-async modes
+
+# ── 21-agent-cache 专属 ───────────────────────────────────────────────
+#
+# ⚠️ Redis 用**独立容器 + 独立端口**，不复用 Milvus 那套。
+#    缓存是可选组件，挂了要能降级 —— 所以它必须能独立起停。
+redis-up-21: ## 启动 Redis 容器（21-agent-cache 用）
+	$(MAKE) -C 21-agent-cache redis-up
+
+redis-down-21: ## 停止 Redis 容器
+	$(MAKE) -C 21-agent-cache redis-down
+
 eval-12: ## 12-rag-summary：跑评估集出消融报告 ★
 	$(MAKE) -C 12-rag-summary eval
+
+## ── 20 性能剖析 ─────────────────────────────────────────────────────
+
+profile-20: ## 20-agent-preformence-analysis：剖析 naive 版（三工具全跑）★
+	$(MAKE) -C 20-agent-preformence-analysis profile
+
+py-compare: ## 20-agent-preformence-analysis：三工具对比 + 优化前后差值 ★
+	$(MAKE) -C 20-agent-preformence-analysis py-compare
+
+bench-20: ## 20-agent-preformence-analysis：Rust 侧计时（多次取中位数）
+	$(MAKE) -C 20-agent-preformence-analysis bench
+
+pprof-20: ## 20-agent-preformence-analysis：Rust 侧采样出火焰图 ★
+	$(MAKE) -C 20-agent-preformence-analysis pprof
+
+setup-20: ## 20-agent-preformence-analysis：首次准备（uv venv + uv sync + 镜像）★
+	$(MAKE) -C 20-agent-preformence-analysis setup
 
 ## ── Milvus 容器 ────────────────────────────────────────────────────────
 

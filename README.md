@@ -24,6 +24,9 @@
 17-agent-memory  手撕 Agent Memory：两级记忆（线程状态 + 长期事实）
 18-agent-error  手撕 Agent 错误处理：middleware 驱动的可诊断工具失败
 19-agent-summary 研究助手 Agent：RAG + Web 搜索 + 周报/项目构建（带接地校验）
+20-agent-preformence-analysis 性能瓶颈分析：cProfile / py-spy / Scalene 三工具剖析
+21-agent-cache 手撕 Redis 缓存：缓存 LLM 响应（内容寻址 + 四种控制 + 降级）
+22-agent-async 手撕异步处理：并发工具执行（四档模式 + 限流 + 线程池轨道）
 ```
 
 ## 思维导图：整个仓库
@@ -126,6 +129,20 @@ mindmap
         周报与项目构建
         接地三态校验
         悬空引用即幻觉
+      20-agent-preformence-analysis 性能瓶颈分析
+        cProfile 统计型剖析
+        py-spy 采样型剖析
+        Scalene 插桩型剖析
+        优化前后可复现差值
+      21-agent-cache Redis 缓存
+        内容寻址缓存键
+        四种缓存控制
+        降级与工具白名单
+        中间轮缓存让 agentic 命中
+      22-agent-async 异步处理
+        四档并发模式
+        限流并发
+        三条执行轨道
     核心认知
       Loader 决定拿到什么
       Splitter 决定能检索什么
@@ -225,7 +242,24 @@ graph TB
         R19["19-agent-summary<br/>RAG + Web 搜索 + 报告<br/>接地三态校验"]
     end
 
+    subgraph L17["性能瓶颈分析"]
+        R20["20-agent-preformence-analysis<br/>cProfile · py-spy · Scalene<br/>优化前后可复现差值"]
+    end
+
+    subgraph L18["Redis 缓存"]
+        R21["21-agent-cache<br/>内容寻址缓存键<br/>四种控制 · 降级 · 白名单"]
+    end
+
+    subgraph L19["异步处理"]
+        R22["22-agent-async<br/>四档并发模式 · 限流<br/>三条执行轨道"]
+    end
+
     R18 -.错误决策复用.-> R19
+    R8 -.BM25 实现复用.-> R20
+    R16 -.Function Calling 复用.-> R21
+    R18 -.错误决策复用.-> R22
+    R14 -.工具底座复用.-> R22
+    R16 -.结构化协议复用.-> R22
 
     R4 --> R5 --> R6 --> R7 --> R8 --> R9
     R5 -.向量存储抽象.-> R10
@@ -246,9 +280,9 @@ graph TB
     R18 -.结构化协议复用.-> R16
     R18 -.Schema 校验复用.-> R14
     R14 -.LLM 抽象复用.-> R7
-    AX -.HTTP 层复用到.-> R6 & R7 & R8 & R9 & R10 & R11 & R12 & R13 & R14 & R16 & R17 & R18
-    LOG -.日志设施复用到.-> AX & R6 & R7 & R8 & R9 & R10 & R11 & R12 & R13 & R14 & R16 & R17 & R18
-    GN -.LLM 客户端.-> R6 & R7 & R8 & R9 & R13 & R14 & R16 & R17 & R18
+    AX -.HTTP 层复用到.-> R6 & R7 & R8 & R9 & R10 & R11 & R12 & R13 & R14 & R16 & R17 & R18 & R22
+    LOG -.日志设施复用到.-> AX & R6 & R7 & R8 & R9 & R10 & R11 & R12 & R13 & R14 & R16 & R17 & R18 & R22
+    GN -.LLM 客户端.-> R6 & R7 & R8 & R9 & R13 & R14 & R16 & R17 & R18 & R22
     RG -.Agent 模式.-> R6
 
     style R6 fill:#e8f5e9
@@ -261,6 +295,7 @@ graph TB
     style R14 fill:#d0ebff
     style R17 fill:#d0ebff
     style R18 fill:#ffe0e0
+    style R22 fill:#d0ebff
 ```
 
 ### RAG 主线数据流（离线索引 + 在线查询）
@@ -832,6 +867,9 @@ RUST_LOG=warn,rag_12::retriever=debug  # 只对某个模块开 debug
 | [17-agent-memory](17-agent-memory/) | Agent 每轮都不记得上一轮 | **短期记忆按 thread_id 隔离、长期记忆按 owner 分区；召回的事实只进 system 不进历史；事实要合并而不是追加** |
 | [18-agent-error](18-agent-error/) | 工具失败了不知道怎么办 | **重试和降级是两个正交维度；只有 Transient 该重试；致命错误不能降级；终止前也要把回执发完** |
 | [19-agent-summary](19-agent-summary/) | 工具调通了，然后呢 | **把「查资料」和「写文档」拆成两阶段；每条结论都要能追回一条证据；引用不存在的编号就是幻觉，必须在代码里判** |
+| [20-agent-preformence-analysis](20-agent-preformence-analysis/) | 功能对了，但不知道慢在哪 | **三个剖析工具量的不是同一件事（IO 等待 vs CPU 热点）；优化前后差值必须单独用纯净运行测；采样器不是坏了，是程序跑太快** |
+| [21-agent-cache](21-agent-cache/) | 反复问同一个问题，反复付一次模型的钱 | **缓存键必须包含所有影响输出的东西；no-cache 管读、no-store 管写；缓存在关键路径外所以失败只降级不重试；「agentic 必然 miss」不是 exact-match 的固有性质，而是「中间轮不写缓存」造成的（修掉后命中率 0%→100%）** |
+| [22-agent-async](22-agent-async/) | 一轮里的多个工具调用一个接一个等 | **并发执行后结果乱序，回执必须按 call_id 还原输入顺序；同步阻塞的工具塞进 async 会卡死整个事件循环（要 spawn_blocking）；buffer_unordered(0) 会让请求永远挂住；并发 ≠ 并行，CPU 密集任务并发零收益** |
 
 ## 快速开始
 
@@ -899,6 +937,26 @@ make demo-19                       # 跑一次周度总结（研究 + 成文 + �
 make demo-19-plan                  # 跑一次项目构建方案 ★
 make search-19                     # 直接调 Web 搜索工具（不经模型）★
 make serve-19                      # 启动 19-agent-summary 服务（:3120）
+
+# 20-agent-preformence-analysis：性能瓶颈分析
+make py-compare                    # ★ 三工具对比 + 优化前后差值（Python 侧）
+make profile-20                    # ★ 剖析 naive 版
+make pprof-20                      # ★ Rust 侧采样出火焰图
+make bench-20                      # Rust 侧计时（多次取中位数）
+make setup-20                      # ★ 首次准备（uv venv + uv sync + 镜像）
+
+# 21-agent-cache：Redis 缓存
+make redis-up-21                    # 启动 Redis 容器（docker）
+make demo-21                       # ★ 连跑两次同一问题（第二次命中缓存）
+make compare-21                    # ★ 缓存开 / 关对照实验
+make semantics-21                   # ★ ★ 三档缓存语义对照（agentic 能否命中）
+make serve-21                      # 启动 21-agent-cache 服务（:3130）
+
+# 22-agent-async：异步处理
+make bench-22                      # ★★ 并发对照实验（模拟负载，稳）
+make bench-real-22                 # ★★ 并发对照实验（真实天气接口）
+make modes-22                      # 四种并发模式说明
+make serve-22                      # 启动 22-agent-async 服务（:3140）
 
 # 各模块独立运行
 cargo run -p axum-01                    # HTTP 服务
@@ -1018,6 +1076,8 @@ cd 08-rag && make help
 | 17-agent-memory | 3100 | `make serve-17` |
 | 18-agent-error | 3110 | `make serve-18` |
 | 19-agent-summary | 3120 | `make serve-19` |
+| 21-agent-cache | 3130 | `make serve-21` |
+| 22-agent-async | 3140 | `make serve-22` |
 
 ### 常见环境变量前缀
 
@@ -1038,6 +1098,9 @@ cd 08-rag && make help
 | `MEM_` | 17-agent-memory | 存储方式 / 召回条数 / 历史长度配置 |
 | `ERR_` | 18-agent-error | 重试次数 / 退避 / 工具选择配置 |
 | `SUM_` | 19-agent-summary | 搜索后端 / 知识库目录 / 证据条数配置 |
+| `PERF_` | 20-agent-preformence-analysis | 产物目录 / 剖析工具 / 重复次数 |
+| `CACHE_` | 21-agent-cache | 缓存开关 / TTL / 命名空间 / Redis URL / 工具白名单 |
+| `ASYNC_` | 22-agent-async | 并发上限 / 工具超时 / 重试退避 / 模型配置 |
 
 ### 文档维护
 
@@ -1088,4 +1151,10 @@ make check-mermaid    # 校验所有 README 的 mermaid 图能正常渲染
 ⑱ 18-agent-error 搞懂「失败了到底该怎么办」
        ↓
 ⑲ 19-agent-summary 搞懂「怎么把查到的资料变成有据可查的文档」
+       ↓
+⑳ 20-agent-preformence-analysis 搞懂「慢了到底慢在哪」
+       ↓
+㉑ 21-agent-cache 搞懂「重复的活怎么不用重做」
+       ↓
+㉒ 22-agent-async 搞懂「I/O 密集型怎么改成并发」
 ```

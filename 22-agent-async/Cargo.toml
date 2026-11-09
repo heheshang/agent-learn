@@ -1,0 +1,57 @@
+[package]
+name = "agent-22"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+agent-logging = { path = "../00-logging" }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+
+# ── 异步基础设施 ──────────────────────────────────────────────────────
+# `futures`：本项目的**核心**依赖。
+#
+# 用到的三样东西：
+# - `StreamExt::buffer_unordered` —— 带**限流**的并发执行（LangChain 的
+#   `max_concurrency` 对应物）
+# - `FuturesUnordered` —— 「谁先完成谁先返回」（LangChain 的
+#   `batch_as_completed` 对应物）
+# - `join_all` —— 等全部完成再返回（LangChain 的 `batch` 对应物）
+#
+# ⚠️ 为什么不用 `tokio::spawn`：
+#    `spawn` 需要 `'static` 所有权，而本项目的工具/任务是借用语境的，
+#    只能 `join_all` 这类**就地组合**的并发原语。
+futures = { workspace = true }
+
+# ── HTTP API 层 ──────────────────────────────────────────────────────
+axum = { workspace = true }
+tower-http = { workspace = true }
+
+# ── LLM 层 ──────────────────────────────────────────────────────────
+# 复用 16 的结构化工具调用协议 + 18 的错误分类。
+genai = { workspace = true }
+
+# ── 真实 I/O 工具（天气 API，免 key）─────────────────────────────────
+reqwest = { workspace = true }
+
+# ── 复用 14（天气工具）/ 16（ToolSpec）/ 18（错误分类 + 中间件）────
+#
+# - `agent_14::weather::WeatherTool` —— 真实 HTTP（Open-Meteo，免 key）
+# - `agent_16::tools::ToolSpec` —— 工具契约
+# - `agent_16::agent::normalize_arguments` —— 工具参数规整
+# - `agent_18::error::{ErrorKind, ErrorCode, ToolError}` —— 错误三分类
+# - `agent_18::middleware::ErrorHandlingMiddleware` —— 重试 / 降级 / 终止
+#   （**并发执行时复用它**，一个中间件实例可被多个并发任务同时调用）
+agent-14 = { path = "../14-agent-tool" }
+agent-16 = { path = "../16-agent-function-calling" }
+agent-18 = { path = "../18-agent-error" }
+
+# ── 复用 13（算术求值器 / BM25 索引）与 08（BM25 倒排）───────────
+agent-13 = { path = "../13-agent-core" }
+rag-08 = { path = "../08-rag" }
+
+[dev-dependencies]
+tower = { workspace = true }
