@@ -205,6 +205,136 @@ sequenceDiagram
     end
 ```
 
+---
+
+## 代码调用详细流程图（函数级）
+
+> 节点写的是**真实函数名**，边上标的是**调用点行号**。全部对着源码。
+
+### 入口：注册表是怎么建起来的
+
+**本地工具和 MCP 工具在 Agent 眼里完全一样** —— 都只是 `ToolSpec`。这张图就是「来源与使用方式解耦」的代码证据。
+
+```mermaid
+flowchart TD
+    MAIN["main.rs:37<br/>main()"] --> BR["main.rs:100<br/>build_registry(config)"]
+    BR --> W["weather.rs::WeatherTool::new()"]
+    BR --> MCPC["mcp.rs:225<br/>McpClient::connect()"]
+    BR --> TR["tool.rs::ToolRegistry::new(tools)"]
+    BR --> ALLOW["tool.rs::allow_names()<br/>（配置了白名单才生效）"]
+
+    W --> TR
+    MCPC --> MCPTOOL["mcp.rs:520<br/>impl Tool for McpTool"]
+    MCPTOOL --> TR
+
+    MAIN --> BA["main.rs:167<br/>build_agent(config)"]
+    BA --> AG["agent.rs:160<br/>Agent::new()"]
+
+    MAIN --> SERVE["main.rs:486<br/>serve()"]
+    SERVE --> ROUTER["api/routes.rs:34<br/>router(state)"]
+    ROUTER --> HANDLER["api/handlers.rs:152<br/>run()"]
+
+    style TR fill:#e8f4ff,stroke:#4a90d9,stroke-width:2px
+    style MCPTOOL fill:#e8f5e9,stroke:#4caf50
+```
+
+### ★ `Agent::run_with_mode()` 的完整调用链
+
+**红色节点是「容易写错」的地方。**
+
+```mermaid
+flowchart TD
+    RUN["agent.rs:204<br/>Agent::run(question)"] --> RWM["agent.rs:214<br/>run_with_mode(question, mode)"]
+    RWM --> MODE{"mode.uses_tools()?"}
+    MODE -->|"Direct"| NOTOOL["tool.rs::ToolRegistry::new(vec![])<br/>★ 提示词里也不能出现工具说明"]
+    MODE -->|"ActOnly / ReAct"| ACTIVE["agent.rs:233<br/>self.registry.clone()"]
+    NOTOOL --> SPECS
+    ACTIVE --> SPECS["tool.rs:337<br/>active_tools.specs()"]
+
+    SPECS --> SYSP["prompt.rs:179<br/>system_prompt_for(mode)"]
+    SPECS --> BUILD["prompt.rs:87<br/>build_prompt(mode, specs, question, trajectory, few_shot)"]
+    BUILD --> CHAT["llm.rs::Llm::chat(system, user)"]
+    CHAT --> RAW["模型原始输出"]
+    RAW --> PARSE["★ agent.rs:266<br/>agent_13::parse_react_output()"]
+
+    PARSE -->|"FinalAnswer"| FINAL["agent.rs:445<br/>最终收尾调用"]
+    FINAL --> DONE(["返回 AgentRun"])
+
+    PARSE -->|"Action"| CALL["agent.rs:345<br/>active_tools.call(tool, args, ctx)"]
+    CALL --> INNER["tool.rs:454<br/>call_inner()"]
+    INNER --> GET{"get(name)<br/>找得到工具?"}
+    GET -->|"找不到"| ERR1["ToolError::unknown()"]
+    GET -->|"找得到"| FILL["schema.rs:277<br/>fill_defaults()"]
+    FILL --> VALID["schema.rs:105<br/>validate()"]
+    VALID -->|"不通过"| ERR2["★ ToolError::invalid_args()<br/>不发请求"]
+    VALID -->|"通过"| EXEC["impl Tool::call()"]
+
+    EXEC --> W["weather.rs:665<br/>WeatherTool::call()"]
+    EXEC --> M["mcp.rs:520<br/>McpTool::call()"]
+
+    W --> OM["Open-Meteo<br/>地名 → 经纬度 → 预报"]
+    M --> RPC["mcp.rs:295<br/>McpClient::call_tool()"]
+    RPC --> JSONRPC["mcp.rs:386<br/>send() → JSON-RPC 2.0"]
+
+    ERR1 --> OBS
+    ERR2 --> OBS
+    OM --> OBS
+    JSONRPC --> OBS
+
+    OBS["★ agent.rs:约 360<br/>ToolOutcome → Observation<br/>失败也变成观察，不中断"]
+    OBS --> TRAJ["trajectory 累加"]
+    TRAJ --> RWM
+
+    style RWM fill:#e8f4ff,stroke:#4a90d9,stroke-width:2px
+    style PARSE fill:#ffe6e6,stroke:#d94a4a,stroke-width:2px
+    style ERR2 fill:#ffe6e6,stroke:#d94a4a
+    style OBS fill:#ffe6e6,stroke:#d94a4a,stroke-width:2px
+    style NOTOOL fill:#fff4e6,stroke:#e8a33d
+```
+
+### 失败语义：同一个错误，两种归宿
+
+这是 14 最容易搞混的地方 —— **错误是不是 HTTP 错误，取决于谁扮演了模型角色**。
+
+```mermaid
+flowchart TD
+    CALL["agent.rs:345<br/>active_tools.call()"] --> INNER["tool.rs:454<br/>call_inner() → Result"]
+
+    INNER -->|"Agent 循环里"| AGPATH["agent.rs:约 360<br/>Err → ToolOutcome::failed<br/>→ Observation 喂回模型"]
+    INNER -->|"用户直接调工具"| USERPATH["agent.rs:519<br/>call_tool_directly()<br/>→ call_strict() → Err 上抛"]
+    USERPATH --> HTTP["api/handlers.rs:108<br/>call_tool()"]
+    HTTP -->|"参数错 / 未知工具"| BAD["★ 400 Bad Request"]
+    HTTP -->|"服务端故障"| ERR5["500 Internal Error"]
+
+    style AGPATH fill:#e8f5e9,stroke:#4caf50,stroke-width:2px
+    style BAD fill:#ffe6e6,stroke:#d94a4a,stroke-width:2px
+```
+
+### MCP 客户端：三次握手
+
+```mermaid
+flowchart TD
+    CONNECT["mcp.rs:225<br/>McpClient::connect()"] --> INIT["mcp.rs:342<br/>request('initialize')"]
+    INIT --> HDR["★ 从**响应头**读 Mcp-Session-Id"]
+    HDR --> LIST["mcp.rs:264<br/>list_tools()"]
+    LIST --> REG["mcp.rs:520<br/>转成本地 McpTool"]
+    REG --> USE["之后调工具<br/>mcp.rs:295 call_tool()"]
+
+    USE --> CONFLICT{"响应 409 / 404?"}
+    CONFLICT -->|"是"| CLEAR["★ 清空 session_id<br/>重新握手"]
+    CLEAR --> INIT
+    CONFLICT -->|"否"| OK["解析响应"]
+
+    OK --> PARSE["mcp.rs:462<br/>parse_json_rpc_response()"]
+    PARSE --> FMT{"响应 Content-Type?"}
+    FMT -->|"application/json"| JSON["直接解析"]
+    FMT -->|"text/event-stream"| SSE["★ 兼容 SSE 格式"]
+
+    style HDR fill:#ffe6e6,stroke:#d94a4a,stroke-width:2px
+    style CLEAR fill:#ffe6e6,stroke:#d94a4a,stroke-width:2px
+    style SSE fill:#fff4e6,stroke:#e8a33d
+```
+
 ## 三条核心设计原则
 
 ### 原则 1：工具失败不是请求失败

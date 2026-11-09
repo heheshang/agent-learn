@@ -565,6 +565,140 @@ pub trait Retriever: Send + Sync + std::fmt::Debug {
 
 ---
 
+## 代码调用详细流程图（函数级）
+
+> 节点写的是**真实函数名**，边上标的是**调用点行号**。全部对着源码。
+
+### ★ `SummaryPipeline::ask_with()` 的完整调用链
+
+**五个阶段**：改写 → 检索 → 重排 → 压缩 → 生成。这张图是 12 的主干。
+
+```mermaid
+flowchart TD
+    MAIN["main.rs:170<br/>demo(cli, config)"] --> BOOT["bootstrap.rs:185<br/>bootstrap(config)"]
+    BOOT --> ENSURE["bootstrap.rs:117<br/>ensure_index(config)"]
+    BOOT --> PIPE["pipeline.rs:178<br/>SummaryPipeline::new()"]
+
+    MAIN --> ASK["pipeline.rs:329<br/>ask_with(query, mode)"]
+    ASK --> RET["pipeline.rs:212<br/>retrieve_with(query, mode)"]
+
+    RET --> REWRITE["★ pipeline.rs:394<br/>transform_queries(query, mode)"]
+    REWRITE -->|"失败"| DEG1["降级：退回原问题<br/>不报错"]
+    REWRITE -->|"成功"| MULTI["多个查询变体"]
+
+    MULTI --> SEARCH["retriever.rs:369<br/>Retriever::search()"]
+    SEARCH --> DENSE["retriever.rs:258<br/>search_dense()"]
+    SEARCH --> KW["retriever.rs:278<br/>search_keyword()"]
+    SEARCH --> SH["retriever.rs:298<br/>search_server_hybrid()"]
+    SEARCH --> CF["retriever.rs:332<br/>search_client_fusion()"]
+
+    DENSE --> MV["MilvusStore"]
+    KW --> BM25["本地 BM25 索引"]
+    SH --> MV
+    CF --> MV
+    CF --> BM25
+
+    MULTI --> FUSE["★ pipeline.rs:538<br/>fuse_across_queries(routes, top_k)<br/>跨问法 RRF（路内排名）"]
+    DENSE --> FUSE2["pipeline.rs:约 253<br/>单查询内融合"]
+    FUSE2 --> FUSE
+
+    FUSE --> THRESH{"min_score 阈值<br/>只对有 dense_score 的生效"}
+    THRESH --> RETRANK["pipeline.rs:448<br/>rerank(query, fused_hits)"]
+    RETRANK --> RR["08-rag::reranker::Reranker"]
+    RETRANK -->|"失败"| DEG2["降级：退回融合后原始顺序"]
+
+    RET --> COMPRESS["compress.rs:142<br/>compressor.compress(hits)"]
+    COMPRESS -->|"失败"| DEG3["降级：退回未压缩片段"]
+
+    ASK --> PROMPT["pipeline.rs:600<br/>build_user_prompt(context, query)"]
+    ASK --> GEN["pipeline.rs:360<br/>llm.chat(system, user_prompt)"]
+    GEN --> CITE["pipeline.rs:617<br/>extract_citations(answer, passages)"]
+    CITE --> OUT(["AskOutcome<br/>答案 + 引用 + 压缩统计"])
+
+    style RET fill:#e8f4ff,stroke:#4a90d9,stroke-width:2px
+    style FUSE fill:#ffe6e6,stroke:#d94a4a,stroke-width:2px
+    style REWRITE fill:#fff4e6,stroke:#e8a33d
+    style DEG1 fill:#fff4e6,stroke:#e8a33d
+    style DEG2 fill:#fff4e6,stroke:#e8a33d
+    style DEG3 fill:#fff4e6,stroke:#e8a33d
+```
+
+### 两层融合：别搞混了
+
+这是 12 最容易看错的地方 —— **融合有两层，算法一样但排名口径不同**。
+
+```mermaid
+flowchart TD
+    subgraph L1["第一层：单查询内的 dense + BM25 融合"]
+        A1["dense 检索结果"] --> M1["RRF"]
+        A2["BM25 检索结果"] --> M1
+        M1 --> R1["融合后的命中列表"]
+    end
+
+    subgraph L2["第二层：多个查询变体之间的融合"]
+        B1["查询1 → 第一层结果"] --> M2["★ fuse_across_queries()"]
+        B2["查询2 → 第一层结果"] --> M2
+        B3["查询N → 第一层结果"] --> M2
+        M2 --> R2["最终候选池"]
+    end
+
+    R1 --> B1
+    R1 --> B2
+    R1 --> B3
+
+    NOTE["⚠️ 第二层必须用**路内排名**<br/>用全局下标会让多路融合退化成<br/>「第一路说了算」<br/>回归测试：cross_query_fusion_uses_per_route_ranks"]
+
+    style M2 fill:#ffe6e6,stroke:#d94a4a,stroke-width:2px
+    style NOTE fill:#fff4e6,stroke:#e8a33d
+```
+
+### 分数语义：为什么 `dense_score` 必须是 `Option`
+
+```mermaid
+flowchart LR
+    SH["服务端混合检索"] --> FUSED["★ 返回的是融合后的 RRF 分"]
+    FUSED --> DENSE["Hit.dense_score = None<br/>（拿不到分项）"]
+    FUSED --> BM["Hit.bm25_score = None"]
+    FUSED --> USE["min_score 阈值只对<br/>dense / client_fusion 生效"]
+
+    CD["客户端双路融合"] --> D2["Hit.dense_score = Some(余弦)"]
+    CD --> B2["Hit.bm25_score = Some(BM25 分)"]
+    CD --> USE2["min_score 阈值生效"]
+
+    style DENSE fill:#ffe6e6,stroke:#d94a4a
+    style D2 fill:#e8f5e9,stroke:#4caf50
+```
+
+### 降级链：每一环都有退路
+
+```mermaid
+flowchart TD
+    Q["查询"] --> RW{"改写"}
+    RW -->|"失败"| RW2["原问题<br/>❌ 不报错"]
+    RW -->|"成功"| SR{"服务端混合检索"}
+    SR -->|"失败"| CF2["客户端双路融合"]
+    SR -->|"成功"| RR2{"重排"}
+    CF2 -->|"也失败"| ERR["✅ 报错<br/>没数据就没答案"]
+    CF2 -->|"成功"| RR2
+    RR2 -->|"失败"| RR3["原始顺序<br/>❌ 不报错"]
+    RR2 -->|"成功"| CP{"压缩"}
+    RR3 --> CP
+    CP -->|"失败"| CP2["未压缩片段<br/>❌ 不报错"]
+    CP -->|"成功"| GEN2{"生成"}
+    CP2 --> GEN2
+    GEN2 -->|"失败"| ERR2["✅ 报错<br/>（检索结果仍随错误返回）"]
+    GEN2 -->|"成功"| OK(["答案 + degrade_reason"])
+
+    style RW2 fill:#fff4e6,stroke:#e8a33d
+    style RR3 fill:#fff4e6,stroke:#e8a33d
+    style CP2 fill:#fff4e6,stroke:#e8a33d
+    style ERR fill:#ffe6e6,stroke:#d94a4a
+    style ERR2 fill:#ffe6e6,stroke:#d94a4a
+    style OK fill:#e8f5e9,stroke:#4caf50
+```
+
+---
+
 
 
 ## 踩过的坑

@@ -417,6 +417,120 @@ RRF 只用排名，天然免疫分数不可比的问题。
 
 ---
 
+## 代码调用详细流程图（函数级）
+
+> 节点写的是**真实函数名**，边上标的是**调用点行号**。全部对着源码。
+
+### ★ 查询流水线：三段式（改写 → 多路检索 → 融合）
+
+```mermaid
+flowchart TD
+    MAIN["main.rs:130<br/>run_demo()"] --> BOOT["api/mod.rs:86<br/>build_pipeline()"]
+    BOOT --> PIPE["pipeline.rs:127<br/>QueryPipeline::new()"]
+
+    MAIN --> ASK["pipeline.rs:324<br/>ask(question, strategy)"]
+    ASK --> RET["pipeline.rs:190<br/>retrieve_with(question, strategy, fusion)"]
+
+    RET --> TF["★ pipeline.rs:291<br/>transform_with_fallback(question, strategy)"]
+    TF --> TRS["pipeline.rs:160<br/>transformer(strategy)"]
+    TRS --> H["transform/hyde.rs:75<br/>HydeTransformer"]
+    TRS --> MQ["transform/multi_query.rs:94<br/>MultiQueryTransformer"]
+    TRS --> RW["transform/rewrite.rs:71<br/>RewriteTransformer"]
+    TRS --> DC["transform/decompose.rs:116<br/>DecomposeTransformer"]
+    TRS --> NOOP["transform/mod.rs:467<br/>NoopTransformer"]
+
+    H --> PARSE["transform/mod.rs:225<br/>parse_numbered_lines()"]
+    MQ --> PARSE
+    RW --> PARSE2["transform/mod.rs:409<br/>parse_single()"]
+    DC --> PARSE
+
+    PARSE --> CHK{"至少一条?"}
+    PARSE2 --> CHK
+    CHK -->|"否"| FALL["★ pipeline.rs:约 300<br/>降级：回落原问题<br/>改写必须是「纯增强」"]
+    CHK -->|"是"| QUERIES["Vec<TransformedQuery>"]
+
+    QUERIES --> SPECS["pipeline.rs:227<br/>组装 specs：(text, EmbedMode, Strategy)"]
+    FALL --> SPECS
+    SPECS --> MULTI["retrieval.rs:188<br/>retriever.retrieve_multi(&specs, per_k)"]
+
+    MULTI --> EMB["★ retrieval.rs:205<br/>并发 spawn_blocking 嵌入"]
+    EMB --> RUNS["Vec<RankedRun>（每路一份排名）"]
+
+    RUNS --> FUSE["★ fusion.rs:228<br/>fuse(runs, method, top_k)"]
+    FUSE --> FRRF["fusion.rs:257<br/>fuse_rrf()"]
+    FUSE --> FMAX["fusion.rs:329<br/>fuse_max_score()"]
+    FUSE --> FCON["fusion.rs:390<br/>fuse_concat()（对照组）"]
+    FRRF --> THRESH{"min_score 阈值<br/>按 best_score 过滤"}
+    FMAX --> THRESH
+    FCON --> THRESH
+    THRESH --> ASK
+
+    style RET fill:#e8f4ff,stroke:#4a90d9,stroke-width:2px
+    style TF fill:#fff4e6,stroke:#e8a33d
+    style FALL fill:#ffe6e6,stroke:#d94a4a,stroke-width:2px
+    style FUSE fill:#ffe6e6,stroke:#d94a4a,stroke-width:2px
+    style EMB fill:#fff4e6,stroke:#e8a33d
+```
+
+### 多路检索：并发嵌入 + 各自排名
+
+**每路检索产出一份独立的排名列表** —— 融合的输入是「排名」而不是「分数」。
+
+```mermaid
+flowchart TD
+    SPECS["specs: Vec<(text, EmbedMode, Strategy)>"] --> LOOP["retrieval.rs:200<br/>for (text, mode, _) in queries"]
+    LOOP --> SB["★ retrieval.rs:205<br/>tokio::task::spawn_blocking<br/>（嵌入是 CPU 密集同步调用）"]
+    SB --> EMB["retrieval.rs:263<br/>embed_text(embedder, text, mode)"]
+    EMB --> VEC["查询向量"]
+    VEC --> SEARCH["store.search(vector, k)"]
+    SEARCH --> RUN["RankedRun { hits, strategy }"]
+    RUN --> ALL["Vec<RankedRun>（N 路）"]
+    ALL --> FUSE["fusion.rs:228<br/>fuse()"]
+
+    NOTE["⚠️ EmbedMode 区分了<br/>「原问题」和「假想答案文档」<br/>的向量化方式 —— 这是 HyDE 的关键"]
+
+    style SB fill:#fff4e6,stroke:#e8a33d,stroke-width:2px
+    style NOTE fill:#ffe6e6,stroke:#d94a4a
+```
+
+### 降级链：改写必须是「纯增强」
+
+**这是 07 最重要的一条设计原则** —— 改写失败不能影响可用性。
+
+```mermaid
+flowchart TD
+    Q["原问题"] --> TF{"改写"}
+    TF -->|"失败（模型挂了 / 输出为空）"| FALL["★ 回落原问题<br/>❌ 不报错"]
+    TF -->|"成功"| RUNS["N 路检索"]
+    FALL --> RUNS
+    RUNS --> FUSE["融合"]
+    FUSE --> THRESH{"min_score"}
+    THRESH -->|"过滤后为空"| EMPTY["❌ 报错<br/>（真没数据）"]
+    THRESH -->|"有命中"| GEN["生成答案"]
+    FUSE -->|"某一路失败"| DEG2["该路跳过<br/>其余路继续"]
+
+    style FALL fill:#e8f5e9,stroke:#4caf50,stroke-width:2px
+    style EMPTY fill:#ffe6e6,stroke:#d94a4a
+    style DEG2 fill:#fff4e6,stroke:#e8a33d
+```
+
+### 三种融合方法：同一个输入，三种口径
+
+```mermaid
+flowchart LR
+    RUNS["Vec<RankedRun><br/>N 路的排名列表"] --> RRF["★ fusion.rs:257<br/>fuse_rrf()<br/>score = Σ 1/(60+rank)<br/>只看排名"]
+    RUNS --> MAX["fusion.rs:329<br/>fuse_max_score()<br/>score = max(score_i)<br/>看绝对分"]
+    RUNS --> CON["fusion.rs:390<br/>fuse_concat()<br/>按路顺序拼接<br/>对照组"]
+
+    RRF --> OUT1["跨路可比的排名"]
+    MAX --> OUT2["⚠️ 分数不可比时<br/>会出问题"]
+    CON --> OUT3["没有融合<br/>只看第一路"]
+
+    style RRF fill:#e8f5e9,stroke:#4caf50,stroke-width:2px
+    style MAX fill:#fff4e6,stroke:#e8a33d
+    style CON fill:#ffe6e6,stroke:#d94a4a
+```
+
 ## 一、为什么需要查询改写
 
 06-rag 的检索**只有一步**：把问题变成向量，去索引里找最相似的 k 个。

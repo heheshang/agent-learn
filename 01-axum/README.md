@@ -240,6 +240,117 @@ mindmap
 | GET    | `/users/{id}`| 查询单个用户                  | 用户 JSON / 404      |
 | DELETE | `/users/{id}`| 删除用户                      | 204 / 404           |
 
+---
+
+## 代码调用详细流程图（函数级）
+
+> 节点写的是**真实函数名**，边上标的是**调用点行号**。全部对着源码。
+
+### ★ 一次请求的完整路径
+
+```mermaid
+flowchart TD
+    MAIN["main.rs:8<br/>main()"] --> STATE["handlers.rs:121<br/>app_state()"]
+    MAIN --> ROUTER["routes.rs:6<br/>router(state)"]
+
+    ROUTER --> R1["GET /"]
+    ROUTER --> R2["GET /health"]
+    ROUTER --> R3["GET /users"]
+    ROUTER --> R4["POST /users"]
+    ROUTER --> R5["GET /users/{id}"]
+    ROUTER --> R6["DELETE /users/{id}"]
+    ROUTER --> LAYER["★ routes.rs:24<br/>.layer(agent_logging::trace_layer())"]
+    ROUTER --> WS[".with_state(state)"]
+
+    R1 --> H1["handlers.rs:126<br/>root()"]
+    R2 --> H2["handlers.rs:131<br/>health()"]
+    R3 --> H3["handlers.rs:136<br/>list_users(State, Query<Pagination>)"]
+    R4 --> H4["handlers.rs:177<br/>create_user(State, Json<CreateUser>)"]
+    R5 --> H5["handlers.rs:161<br/>get_user(State, Path<u64>)"]
+    R6 --> H6["handlers.rs:200<br/>delete_user(State, Path<u64>)"]
+
+    H3 --> LOCK["state.lock()<br/>取用户存储锁"]
+    H4 --> LOCK
+    H5 --> LOCK
+    H6 --> LOCK
+    H4 --> ERR["handlers.rs:20<br/>AppError::bad_request()"]
+    H5 --> ERR2["handlers.rs:27<br/>AppError::not_found()"]
+    H6 --> ERR2
+    ERR --> RESP["handlers.rs:35<br/>IntoResponse::into_response()"]
+
+    MAIN --> SERVE["axum::serve(listener, app)"]
+
+    style ROUTER fill:#e8f4ff,stroke:#4a90d9,stroke-width:2px
+    style LAYER fill:#ffe6e6,stroke:#d94a4a,stroke-width:2px
+    style RESP fill:#fff4e6,stroke:#e8a33d
+```
+
+### 提取器：一次请求怎么被拆开
+
+**关键约束：提取器消费 body 有且只有一个。** `Json<T>` 会把 body 整个吃掉，所以同一个 handler 里不能再放第二个消费 body 的提取器。
+
+```mermaid
+flowchart TD
+    REQ["HTTP 请求"] --> MW["trace_layer() 中间件<br/>分配 request_id"]
+    MW --> MATCH["Router 匹配路径 + 方法"]
+    MATCH --> EXTRACT["axum 按顺序跑提取器"]
+
+    EXTRACT --> S["State<AppState><br/>★ 不消费 body"]
+    EXTRACT --> Q["Query<Pagination><br/>★ 不消费 body（来自 URL query）"]
+    EXTRACT --> P["Path<u64><br/>★ 不消费 body（来自路径参数）"]
+    EXTRACT --> J["Json<CreateUser><br/>★ 消费 body"]
+    EXTRACT --> J2["Json<CreateUser><br/>❌ 第二个消费 body 的 → 编译失败"]
+
+    S --> HANDLER["处理器函数"]
+    Q --> HANDLER
+    P --> HANDLER
+    J --> HANDLER
+
+    NOTE["⚠️ body 只有一份<br/>Json / Form / Multipart 都消费它<br/>所以「有且只有一个」不是风格建议，是硬约束"]
+
+    style J fill:#e8f5e9,stroke:#4caf50
+    style J2 fill:#ffe6e6,stroke:#d94a4a,stroke-width:2px
+    style NOTE fill:#fff4e6,stroke:#e8a33d
+```
+
+### 错误怎么变成 HTTP 响应
+
+```mermaid
+flowchart LR
+    HANDLER["处理器返回<br/>Result<Json<User>, AppError>"] --> ERR["AppError"]
+    ERR --> BAD["handlers.rs:20<br/>bad_request(message)<br/>→ 400"]
+    ERR --> NF["handlers.rs:27<br/>not_found(message)<br/>→ 404"]
+    ERR --> RESP["handlers.rs:35<br/>IntoResponse::into_response()"]
+    BAD --> RESP
+    NF --> RESP
+    RESP --> JSON["JSON 错误响应体"]
+    JSON --> CLIENT["客户端收到"]
+
+    NOTE["★ 处理器返回 Result 而不是自己写 Response<br/>错误类型只需实现 IntoResponse<br/>→ 业务代码里全是 ?"]
+
+    style RESP fill:#e8f4ff,stroke:#4a90d9,stroke-width:2px
+    style NOTE fill:#fff4e6,stroke:#e8a33d
+```
+
+### 状态：跨请求共享
+
+```mermaid
+flowchart TD
+    STATE["AppState<br/>Arc<Mutex<UserStore>>"] --> LOCK["lock()"]
+    LOCK --> READ["读：list_users / get_user"]
+    LOCK --> WRITE["写：create_user / delete_user"]
+    READ --> H["处理器"]
+    WRITE --> H
+
+    MAIN2["main.rs:8<br/>main()"] --> WITHSTATE["routes.rs:26<br/>.with_state(state)"]
+    WITHSTATE --> STATE
+
+    NOTE["★ State 是**克隆 Arc 得到的**<br/>所以每个 handler 拿到的都是同一个锁"]
+
+    style STATE fill:#e8f4ff,stroke:#4a90d9,stroke-width:2px
+    style NOTE fill:#fff4e6,stroke:#e8a33d
+```
+
 ## 关键点
 
 ### 1. 创建路由

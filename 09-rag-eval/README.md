@@ -233,6 +233,128 @@ sequenceDiagram
 
 ---
 
+## 代码调用详细流程图（函数级）
+
+> 节点写的是**真实函数名**，边上标的是**调用点行号**。全部对着源码。
+
+### ★ 评估流水线：从问题到差值
+
+```mermaid
+flowchart TD
+    MAIN["main.rs:165<br/>run_eval()"] --> BOOT["pipeline.rs:511<br/>bootstrap(config)"]
+    BOOT --> EMB["pipeline.rs:576<br/>bootstrap_embedder()"]
+    BOOT --> CI["pipeline.rs:591<br/>build_chunk_index()"]
+    BOOT --> PIPE["pipeline.rs:325<br/>EvalPipeline::new()"]
+
+    MAIN --> RV["pipeline.rs:387<br/>run_variant(dataset, variant, evaluator)"]
+    RV --> CASES["pipeline.rs:430<br/>run_cases(dataset, variant)"]
+    CASES --> SEM["Semaphore 限流<br/>默认并发 4"]
+    SEM --> RQ["pipeline.rs:362<br/>run_question(question, mode)"]
+    RQ --> SUE["pipeline.rs:161<br/>SystemUnderEval::run()"]
+    SUE -->|"NoRetrieval"| NOR["pipeline.rs:184<br/>rag_06::prompt::assemble_no_context()"]
+    SUE -->|"其它变体"| RWM["pipeline.rs:205<br/>run_with_mode(question, mode)"]
+    RWM --> RET["08-rag::pipeline::retrieve_with()"]
+    RWM -->|"检索失败"| DEG["pipeline.rs:259<br/>run_without_context()<br/>降级：空上下文继续"]
+
+    RV --> EVAL["report.rs:304<br/>Evaluator::evaluate(dataset, contexts, title, variant, elapsed)"]
+    EVAL --> EC["report.rs:274<br/>evaluate_case(ctx)"]
+    EC --> METRICS{"ctx.metrics 逐个算"}
+    METRICS --> DET["deterministic.rs<br/>recall@k / nDCG / MRR / token F1"]
+    METRICS --> JUDGE["judge.rs<br/>faithfulness / relevancy / correctness"]
+    JUDGE --> RETRY["★ judge.rs:325<br/>chat_with_retry(llm, system, user, attempts)"]
+    DET --> CR["CaseResult { scores, errors }"]
+    RETRY --> CR
+    EVAL --> SUM["report.rs<br/>summarize(&cases)"]
+    SUM --> REP["EvalReport"]
+
+    MAIN --> CMP["report.rs:470<br/>ComparisonReport::compare(baseline, optimized)"]
+    REP --> CMP
+    CMP --> DELTA["MetricDelta { before, after, delta }"]
+    DELTA --> TABLE["report.rs:498<br/>to_table()"]
+
+    style SUE fill:#e8f4ff,stroke:#4a90d9,stroke-width:2px
+    style RETRY fill:#ffe6e6,stroke:#d94a4a,stroke-width:2px
+    style CR fill:#e8f5e9,stroke:#4caf50,stroke-width:2px
+    style DEG fill:#fff4e6,stroke:#e8a33d
+```
+
+### 两类指标：确定性 vs judge
+
+**确定性指标**跑得快、结果可复现；**judge 指标**要调模型，必须关思考 + 批量判分。
+
+```mermaid
+flowchart TD
+    EC["report.rs:274<br/>evaluate_case(ctx)"] --> LOOP["for metric in &self.metrics"]
+
+    LOOP --> DET["deterministic.rs<br/>确定性指标"]
+    LOOP --> JUDGE["judge.rs<br/>judge 指标"]
+
+    DET --> D1["RecallAtK:204"]
+    DET --> D2["NdcgAtK:357"]
+    DET --> D3["Mrr:442"]
+    DET --> D4["TokenF1:67"]
+    DET --> D5["ExactMatch:133"]
+    DET --> D6["ContextPrecisionById:521"]
+
+    JUDGE --> J1["Faithfulness:433<br/>（逐句 verdict，批量一次）"]
+    JUDGE --> J2["AnswerRelevancy:640"]
+    JUDGE --> J3["ContextRelevancy:780"]
+    JUDGE --> J4["AnswerCorrectness:938"]
+
+    J1 --> RETRY["judge.rs:325<br/>chat_with_retry()"]
+    J2 --> RETRY
+    J3 --> RETRY
+    J4 --> RETRY
+
+    RETRY --> EMPTY{"响应是空的?"}
+    EMPTY -->|"是"| AGAIN["重试（≤ JUDGE_RETRY_ATTEMPTS）"]
+    AGAIN --> RETRY
+    EMPTY -->|"否"| PARSE["judge.rs:244<br/>parse_sentence_verdicts()"]
+
+    style RETRY fill:#ffe6e6,stroke:#d94a4a,stroke-width:2px
+    style D1 fill:#e8f5e9,stroke:#4caf50
+```
+
+### 失败 ≠ 0 分：三种失败三种处理
+
+**这张图是 09 最容易搞错的地方。**
+
+```mermaid
+flowchart TD
+    CASE["评估集中的一个样本"] --> GEN{"生成阶段"}
+    GEN -->|"失败"| SKIP["★ 该样本被**跳过**<br/>不进报告，记失败计数"]
+    GEN -->|"成功"| METRIC{"指标阶段"}
+    METRIC -->|"某个指标失败"| MARK["★ 该指标在此样本记为失败<br/>但**样本仍在报告里**"]
+    METRIC -->|"全部成功"| SCORE["正常计分"]
+    MARK --> CR["CaseResult { scores, errors }"]
+    SCORE --> CR
+
+    NOTE["⚠️ 「算出来是 0」和「没算出来」<br/>语义完全不同 —— 混在一起<br/>会让差值失去意义"]
+
+    style SKIP fill:#ffe6e6,stroke:#d94a4a,stroke-width:2px
+    style MARK fill:#fff4e6,stroke:#e8a33d
+    style NOTE fill:#ffe6e6,stroke:#d94a4a
+```
+
+### 评估变体：一次只加一个增强
+
+**差值可归因的前提是「只有一个变量变」。**
+
+```mermaid
+flowchart LR
+    V1["NoRetrieval<br/>无检索基线"] --> V2["DenseOnly<br/>+ 向量检索"]
+    V2 --> V3["Hybrid<br/>+ BM25"]
+    V3 --> V4["HybridRerank<br/>+ 交叉编码器重排"]
+    V4 --> V5["Full<br/>+ 全部"]
+
+    V1 -.->|"差值 1"| D1["检索的贡献"]
+    V2 -.->|"差值 2"| D2["BM25 的贡献"]
+    V3 -.->|"差值 3"| D3["重排的贡献"]
+    V4 -.->|"差值 4"| D4["其余的贡献"]
+
+    style V1 fill:#fff4e6,stroke:#e8a33d
+```
+
 ## 思维导图：整个评估体系
 
 ```mermaid

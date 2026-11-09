@@ -427,6 +427,110 @@ flowchart TB
 
 ---
 
+## 代码调用详细流程图（函数级）
+
+> 节点写的是**真实函数名**，边上标的是**调用点行号**。全部对着源码。
+
+### ★ 检索链路：从问题到精排结果
+
+```mermaid
+flowchart TD
+    MAIN["main.rs:223<br/>run_demo()"] --> BOOT["main.rs:62<br/>bootstrap(config)"]
+    BOOT --> ENSURE["index.rs:78<br/>ensure_index(config)"]
+    BOOT --> BUILD["index.rs:128<br/>build_bm25(data_dir, splitter_config)"]
+    BOOT --> HP["pipeline.rs:119<br/>HybridPipeline::new()"]
+
+    MAIN --> ASK["pipeline.rs:323<br/>ask_with(query, mode)"]
+    ASK --> RET["pipeline.rs:151<br/>retrieve_with(query, mode)"]
+    RET --> POOL["候选池 = candidate_k（召回要多取）<br/>★ reranker 只能重排它拿到的候选"]
+    POOL --> SRCH["hybrid.rs:250<br/>search_with_k(query, mode, top_k, per_path_k)"]
+
+    SRCH --> MODE{"mode?"}
+    MODE -->|"Vector"| V["hybrid.rs:308<br/>search_vector(query, k)"]
+    MODE -->|"Bm25"| B["bm25.rs::Bm25Index::search()"]
+    MODE -->|"Hybrid"| HY["★ 先算 BM25（同步、便宜）<br/>再 await 向量路"]
+
+    V --> EMB["★ spawn_blocking<br/>嵌入是 CPU 密集同步调用<br/>不能卡住 tokio 工作线程"]
+    EMB --> FAISS["FaissStore::search()"]
+    HY --> B
+    HY --> V
+
+    B --> FIN["hybrid.rs:344<br/>finish(vector_hits, bm25_hits, top_k)<br/>RRF 融合 + 按 ID 去重"]
+    V --> FIN
+    FIN --> THRESH{"min_score 阈值"}
+    THRESH --> RERANK["pipeline.rs:245<br/>rerank(query, fused_hits)"]
+    RERANK --> RER{"有 reranker?"}
+    RER -->|"没有"| TRUNC["直接截断 top_n"]
+    RER -->|"有"| XE["reranker.rs:236<br/>LocalCrossEncoder::rerank()"]
+    RER -->|"有"| KW["reranker.rs:624<br/>KeywordReranker::rerank()"]
+    XE -->|"失败"| DEG["降级：退回融合顺序"]
+    TRUNC --> OUT(["精排结果"])
+    DEG --> OUT
+    XE --> OUT
+    KW --> OUT
+
+    style SRCH fill:#e8f4ff,stroke:#4a90d9,stroke-width:2px
+    style FIN fill:#ffe6e6,stroke:#d94a4a,stroke-width:2px
+    style EMB fill:#fff4e6,stroke:#e8a33d,stroke-width:2px
+    style DEG fill:#fff4e6,stroke:#e8a33d
+```
+
+### 两路检索：为什么先算 BM25
+
+**这不是随便写的顺序** —— BM25 是纯内存操作（微秒级），向量路要走嵌入（几十到几百毫秒）。先算便宜的，BM25 的耗时几乎被完全掩盖在嵌入的等待里。
+
+```mermaid
+flowchart LR
+    Q["query"] --> B1["① BM25.search()<br/>同步 · 微秒级"]
+    Q --> B2["② search_vector()<br/>await · 毫秒级"]
+    B1 --> JOIN["finish() 融合"]
+    B2 --> JOIN
+
+    NOTE["⚠️ spawn_blocking 的原因<br/>嵌入是 CPU 密集的**同步**调用<br/>直接放在 async 上下文里<br/>会卡住 tokio 的工作线程"]
+
+    style B1 fill:#e8f5e9,stroke:#4caf50
+    style B2 fill:#fff4e6,stroke:#e8a33d
+    style NOTE fill:#ffe6e6,stroke:#d94a4a
+```
+
+### RRF 融合：按 ID 去重 + 次级键保证可复现
+
+```mermaid
+flowchart TD
+    VH["向量路命中<br/>SearchHit"] --> ACC["hybrid.rs:344<br/>finish()"]
+    BH["BM25 路命中<br/>Bm25Hit"] --> ACC
+    ACC --> V1["for (idx, hit) in vector_hits<br/>rank = idx + 1<br/>contribution = 1/(60 + rank)"]
+    ACC --> B2["for (idx, hit) in bm25_hits<br/>同上"]
+    V1 --> MAP["按 ID 累加到 HashMap<br/>★ 同一个块两路都命中 → 只占一个位置"]
+    B2 --> MAP
+    MAP --> VOTE["votes += 1（共识度）"]
+    VOTE --> SORT["排序：RRF 分降序<br/>→ max(vector_score, bm25_score) 降序<br/>→ ID 升序"]
+    SORT --> TAKE["截断 top_k"]
+
+    NOTE["⚠️ 次级键的作用：保证结果**可复现**<br/>不依赖 HashMap 的迭代顺序"]
+
+    style MAP fill:#ffe6e6,stroke:#d94a4a,stroke-width:2px
+    style SORT fill:#fff4e6,stroke:#e8a33d
+    style NOTE fill:#ffe6e6,stroke:#d94a4a
+```
+
+### 降级链：每一环都有退路
+
+```mermaid
+flowchart TD
+    Q["查询"] --> SV{"向量路"}
+    SV -->|"失败"| BM["★ 降级：只用 BM25 路"]
+    SV -->|"成功"| FUSE{"RRF 融合"}
+    BM --> FUSE
+    FUSE --> RR{"重排"}
+    RR -->|"失败"| DEG1["退回融合顺序<br/>❌ 不报错"]
+    RR -->|"成功"| OK(["精排结果"])
+    DEG1 --> OK
+
+    style BM fill:#fff4e6,stroke:#e8a33d,stroke-width:2px
+    style DEG1 fill:#fff4e6,stroke:#e8a33d
+```
+
 ## 一、为什么要混合检索
 
 06/07 的检索**只有一路**：向量检索。问题在于**向量检索对精确关键词是盲的**。

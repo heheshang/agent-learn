@@ -380,6 +380,109 @@ flowchart TB
 
 ---
 
+## 代码调用详细流程图（函数级）
+
+> 节点写的是**真实函数名**，边上标的是**调用点行号**。全部对着源码。
+
+### ★ 加载链路：目录 → 文档
+
+```mermaid
+flowchart TD
+    MAIN["main.rs:42<br/>main()"] --> LD["main.rs:74<br/>run_load_demo(dir)"]
+    MAIN --> SP["main.rs:132<br/>run_split_demo(dir)"]
+    MAIN --> PIPE["main.rs:261<br/>run_pipeline_demo(dir)"]
+
+    LD --> LODIR["loader.rs:330<br/>load_directory(dir)"]
+    LODIR --> SORT["★ 排序保证加载顺序稳定<br/>（否则每次 run 结果可能不同）"]
+    SORT --> PICK["loader.rs:308<br/>loader_for(path)"]
+    PICK --> ML["loader.rs:141<br/>MarkdownLoader"]
+    PICK --> PL["loader.rs:187<br/>PdfTextLoader"]
+    PICK --> DL["loader.rs:253<br/>DoclingLoader"]
+    ML --> SUP["loader.rs:118<br/>DocumentLoader::supports(path)"]
+    PL --> SUP
+    DL --> SUP
+    SUP --> LOAD["loader.rs:118<br/>DocumentLoader::load(path)"]
+    LOAD --> DOC["LoadedDoc<br/>text + format + loader"]
+
+    PIPE --> LODIR
+    PIPE --> SPLIT["splitter.rs:350<br/>StructureAwareSplitter::split(doc, counter)"]
+    SP --> LODIR
+    SP --> SPLIT
+
+    style LODIR fill:#e8f4ff,stroke:#4a90d9,stroke-width:2px
+    style SORT fill:#ffe6e6,stroke:#d94a4a,stroke-width:2px
+    style PICK fill:#fff4e6,stroke:#e8a33d
+```
+
+### ★ 分割链路：文档 → 块
+
+**`heading_path` 是从字节偏移反查出来的** —— 不管用哪个 splitter，块的位置都能映射回标题层级。
+
+```mermaid
+flowchart TD
+    DOC["LoadedDoc"] --> SPL{"选 splitter"}
+    SPL -->|"默认"| RS["splitter.rs:232<br/>RecursiveSplitter::split()"]
+    SPL -->|"markdown"| MS["splitter.rs:302<br/>MarkdownSplitter::split()"]
+    SPL -->|"结构感知"| SAS["★ splitter.rs:350<br/>StructureAwareSplitter::split()"]
+
+    RS --> PARSE["递归降级：<br/>段落 → 换行 → 句子 → 词 → 字符"]
+    MS --> MCP["按 CommonMark 块元素切"]
+    SAS --> SECT["docling::chunker::parse_sections_with_stack()"]
+
+    SECT --> FITSIZE{"section_tokens <= chunk_size?"}
+    FITSIZE -->|"是"| BUILD["splitter.rs:157<br/>build_chunk(doc, index, heading_path, body, counter, add_heading_context)"]
+    FITSIZE -->|"否"| SPLIT2["再切分"]
+
+    PARSE --> BUILD
+    MCP --> BUILD
+
+    BUILD --> TC["splitter.rs:119<br/>TokenCounter::count()<br/>tiktoken 真实计数"]
+    TC --> HP["splitter.rs:477<br/>heading_path_at(text, byte_offset)<br/>★ 从字节偏移反查标题层级"]
+    HP --> CH["Chunk<br/>id = {文件名}#{序号}<br/>text + embedded_text<br/>heading_path + token_count"]
+    CH --> OUT["进入 05-rag 向量化"]
+
+    style SAS fill:#e8f5e9,stroke:#4caf50,stroke-width:2px
+    style HP fill:#ffe6e6,stroke:#d94a4a,stroke-width:2px
+    style TC fill:#fff4e6,stroke:#e8a33d
+```
+
+### 三个 splitter 的差异：切点选在哪
+
+```mermaid
+flowchart TB
+    subgraph RS["RecursiveSplitter（默认）"]
+        R1["段落"] --> R2["换行"] --> R3["句子"] --> R4["词"] --> R5["字符"]
+        R5 -.->|"都切不动了<br/>只能硬切"| NOTE["⚠️ 切点落在 token 预算上<br/>不是字符数上"]
+    end
+
+    subgraph MS["MarkdownSplitter"]
+        M1["按 CommonMark 块元素<br/>（标题/列表/代码块）"]
+    end
+
+    subgraph SAS["StructureAwareSplitter"]
+        S1["沿标题层级切<br/>★ 块不跨标题"]
+    end
+
+    style R5 fill:#fff4e6,stroke:#e8a33d
+    style S1 fill:#e8f5e9,stroke:#4caf50
+    style NOTE fill:#ffe6e6,stroke:#d94a4a
+```
+
+### `heading_path` 为什么重要
+
+**这是 09-rag-eval 能做「章节 → 块 ID」映射的唯一依据。**
+
+```mermaid
+flowchart LR
+    OFFSET["块在文档中的字节偏移"] --> LOOKUP["splitter.rs:477<br/>heading_path_at(text, byte_offset)"]
+    LOOKUP --> PATH["heading_path<br/>例：RAG / 分块"]
+    PATH --> CHUNK["写进 Chunk.heading_path"]
+    CHUNK --> EVAL["09-rag-eval<br/>ChunkIndex：章节 → 块 ID 映射<br/>→ 支撑 ContextRecallById 指标"]
+
+    style LOOKUP fill:#e8f4ff,stroke:#4a90d9,stroke-width:2px
+    style EVAL fill:#e8f5e9,stroke:#4caf50
+```
+
 ## 一、加载层（Loaders）
 
 ### 抽象

@@ -397,6 +397,83 @@ sequenceDiagram
 
 ---
 
+## 代码调用详细流程图（函数级）
+
+> 节点写的是**真实函数名**，边上标的是**调用点行号**。全部对着源码。
+
+### ★ 问答链路：从问题到带引用的答案
+
+```mermaid
+flowchart TD
+    HANDLER["api/handlers.rs:56<br/>ask()"] --> BOOT["index.rs:236<br/>ensure_index(config)"]
+    BOOT --> BUILD["index.rs:146<br/>build_and_save(...)"]
+    BOOT --> LOAD["index.rs:172<br/>load_store(embedder, index_path)"]
+    BOOT --> RETR["retrieval.rs:185<br/>Retriever::new(store, embedder, config)"]
+
+    HANDLER --> RET["retrieval.rs:211<br/>retrieve_with_top_k(query, top_k)"]
+    RET --> EMB["★ retrieval.rs:227<br/>embedder.embed_query(query)<br/>用 embed_query 不是 embed_documents"]
+    EMB --> VEC["查询向量"]
+    VEC --> FAISS["store.lock().await<br/>FaissStore::search(vector, k)"]
+    FAISS --> THRESH{"min_score 阈值<br/>默认关闭（Naive 的边界）"}
+    THRESH -->|"低于阈值"| REJ["prompt.rs:128<br/>assemble_no_context(question)"]
+    THRESH -->|"通过"| CTX["retrieval.rs:118<br/>to_context()"]
+
+    REJ --> PROMPT
+    CTX --> PROMPT["prompt.rs:80<br/>assemble(result, question)<br/>system + user"]
+    PROMPT --> GEN["generation.rs:124<br/>Generator::generate(prompt)"]
+    GEN --> EXEC["genai::Client::exec_chat()"]
+    EXEC --> CITE["generation.rs:223<br/>extract_citations(answer, retrieval)"]
+    CITE --> OUT(["答案 + citations[]<br/>每个引用可溯源到块"])
+
+    style RET fill:#e8f4ff,stroke:#4a90d9,stroke-width:2px
+    style EMB fill:#ffe6e6,stroke:#d94a4a,stroke-width:2px
+    style REJ fill:#fff4e6,stroke:#e8a33d
+    style OUT fill:#e8f5e9,stroke:#4caf50
+```
+
+### 自主 Agent 的工具调用循环
+
+**06 的 Agent 是「自主」的** —— 模型自己决定要不要检索、检索什么。
+
+```mermaid
+flowchart TD
+    MAIN["main.rs:126<br/>run_demo()"] --> AG["agent.rs:185<br/>Agent::new(retriever, config)"]
+    MAIN --> HANDLER2["api/handlers.rs:113<br/>agent()"]
+
+    AG --> RUN["agent.rs:190<br/>Agent::run(question)"]
+    HANDLER2 --> RUN
+
+    RUN --> SCHEMA["agent.rs:150<br/>search_tool_schema()"]
+    SCHEMA --> REQ["把工具声明进请求"]
+    REQ --> LLM["模型返回"]
+    LLM --> TC{"有 tool_call?"}
+    TC -->|"没有"| ANS["★ 纯文本答案"]
+    TC -->|"有"| EXEC["执行检索工具"]
+    EXEC --> FILL["★ assistant(tool_calls)<br/>再 tool(results)<br/>顺序不能反"]
+    FILL --> REQ
+    TC -->|"max_iterations 到了"| FINAL["最后再问一次<br/>强制基于已有信息作答"]
+    FINAL --> ANS
+
+    NOTE["⚠️ 少了 assistant(tool_calls)，模型就不知道<br/>自己调过什么工具、参数是什么<br/>→ 没法把结果和调用对应起来"]
+
+    style RUN fill:#e8f4ff,stroke:#4a90d9,stroke-width:2px
+    style FILL fill:#ffe6e6,stroke:#d94a4a,stroke-width:2px
+    style NOTE fill:#fff4e6,stroke:#e8a33d
+```
+
+### 引用可溯源：`[n]` 是怎么映射回块的
+
+```mermaid
+flowchart LR
+    ANS["答案文本<br/>「RAG 分三层 [1][2]」"] --> FIND["generation.rs:255<br/>find_bracket_groups(answer)"]
+    FIND --> NUMS["提取出 [1] [2]"]
+    NUMS --> MAP["对照 retrieval.hits 的下标"]
+    MAP --> CITE["generation.rs:223<br/>extract_citations()"]
+    CITE --> OUT["Citation { index, source, heading_path }<br/>用户能点回原文"]
+
+    style CITE fill:#e8f5e9,stroke:#4caf50,stroke-width:2px
+```
+
 ## 一、架构调研
 
 ### 1.1 Naive RAG：为什么叫「朴素」

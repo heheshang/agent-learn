@@ -84,6 +84,97 @@ RUST_LOG=warn,rag_12::retriever=debug  # 只对某个模块开 debug
 3. **不打 `println!` 混进业务逻辑** —— `println!` 没法按模块关掉，
    debug 输出一旦写进去就永远在生产路径上。
 
+---
+
+## 代码调用详细流程图（函数级）
+
+> 节点写的是**真实函数名**，边上标的是**调用点行号**。全部对着源码。
+
+### 初始化：一次性的全局设置
+
+```mermaid
+flowchart TD
+    MAIN["main.rs:1<br/>main()"] --> INIT["lib.rs:109<br/>init(service)"]
+    INIT --> INITL["lib.rs:114<br/>init_with_level(service, default_level)"]
+    INITL --> ENV["★ EnvFilter::try_from_default_env()<br/>RUST_LOG 优先"]
+    ENV -->|"RUST_LOG 没设"| MKFILTER["EnvFilter::new（{level},{module}={level}）"]
+    ENV -->|"RUST_LOG 设了"| USEENV["直接用它"]
+    MKFILTER --> SUB["tracing_subscriber::fmt()<br/>.with_env_filter().with_target()<br/>.with_thread_ids().with_file().with_line_number()"]
+    USEENV --> SUB
+    SUB --> SET["★ set_global_default()<br/>（幂等：重复 init 不会 panic）"]
+    SET --> MOD["lib.rs:153<br/>module_target(service)<br/>把 '-' 换成 '_'"]
+
+    style ENV fill:#e8f4ff,stroke:#4a90d9,stroke-width:2px
+    style SET fill:#ffe6e6,stroke:#d94a4a,stroke-width:2px
+```
+
+### 请求追踪：一个 HTTP 请求的日志生命周期
+
+**核心是 `trace_handler`** —— 它给每个请求开一个 span，并把 `request_id` 传给这次请求触发的所有日志。
+
+```mermaid
+flowchart TD
+    REQ["HTTP 请求"] --> LAYER["routes.rs::.layer(trace_layer())"]
+    LAYER --> TL["lib.rs:193<br/>trace_layer()"]
+    TL --> TH["★ lib.rs:206<br/>trace_handler(request, next)"]
+    TH --> RID["lib.rs:94<br/>next_request_id()<br/>进程内唯一（req-7 形式）"]
+    TH --> META["取 method / path / query"]
+    META --> SPAN["tracing::info_span!（http_request,<br/>request_id, method, path)"]
+    SPAN --> INSTR["★ 用 instrument 而不是 span.enter()"]
+    INSTR --> NEXT["next.run(request).await"]
+    NEXT --> RESP["拿到 Response"]
+    RESP --> STATUS["record（status, status）<br/>record（elapsed_ms, elapsed）"]
+    STATUS --> BR{"status?"}
+    BR -->|">= 500"| E["★ tracing::error!<br/>「请求失败（服务端错误）」"]
+    BR -->|">= 400"| W["★ tracing::warn!<br/>「请求被拒绝（客户端错误）」"]
+    BR -->|"其它"| I["tracing::info!"]
+
+    NOTE["⚠️ 为什么用 instrument 而不是 span.enter()<br/>Entered 守卫跨 .await 不 Send<br/>会让 future 变成 !Send<br/>而 axum 要求 handler future 是 Send"]
+
+    style TH fill:#e8f4ff,stroke:#4a90d9,stroke-width:2px
+    style INSTR fill:#ffe6e6,stroke:#d94a4a,stroke-width:2px
+    style E fill:#ffe6e6,stroke:#d94a4a
+    style W fill:#fff4e6,stroke:#e8a33d
+    style NOTE fill:#fff4e6,stroke:#e8a33d
+```
+
+### 级别语义：为什么 4xx 和 5xx 要分开
+
+**这是全仓库的硬约定** —— 告警不能被 4xx 淹没。
+
+```mermaid
+flowchart LR
+    RESP["HTTP 响应"] --> CODE{"status code"}
+    CODE -->|"2xx / 3xx"| OK["info!<br/>正常业务"]
+    CODE -->|"4xx"| WARN["★ warn!<br/>客户端错误"]
+    CODE -->|"5xx"| ERR["★ error!<br/>服务端错误"]
+    CODE -->|"降级发生"| DEG["★ warn!<br/>降级必须打出来"]
+
+    NOTE["静默降级 = 埋雷<br/>能兜住但不该发生的事<br/>必须留下痕迹"]
+
+    style WARN fill:#fff4e6,stroke:#e8a33d
+    style ERR fill:#ffe6e6,stroke:#d94a4a
+    style DEG fill:#ffe6e6,stroke:#d94a4a
+    style NOTE fill:#ffe6e6,stroke:#d94a4a
+```
+
+### 阶段耗时守卫
+
+```mermaid
+flowchart TD
+    CALL["业务代码"] --> SG["lib.rs:261<br/>stage_guard（阶段名）"]
+    SG --> GUARD["StageGuard"]
+    GUARD --> WORK["执行耗时工作"]
+    WORK --> DROP["★ impl Drop for StageGuard<br/>（lib.rs:282）"]
+    DROP --> ELAPSED["lib.rs:277<br/>elapsed_ms()"]
+    ELAPSED --> LOG["info! 记录耗时"]
+
+    NOTE["★ 用 Drop 实现守卫<br/>即使中途 return / 提前退出<br/>耗时也会被记录"]
+
+    style DROP fill:#e8f4ff,stroke:#4a90d9,stroke-width:2px
+    style NOTE fill:#fff4e6,stroke:#e8a33d
+```
+
 ## 踩坑记录
 
 ### `clippy::type_complexity`：`FromFnLayer` 签名太长

@@ -571,6 +571,110 @@ sequenceDiagram
 
 ---
 
+## 代码调用详细流程图（函数级）
+
+> 节点写的是**真实函数名**，边上标的是**调用点行号**。全部对着源码。
+
+### 灌库链路：两个后端同一套流程
+
+```mermaid
+flowchart TD
+    MAIN["main.rs:105<br/>run_demo()"] --> ENSURE["index.rs:189<br/>ensure_index(config)"]
+    ENSURE --> BACKEND{"config.backend?"}
+    BACKEND -->|"Milvus"| MI["index.rs:95<br/>index_milvus(config, build)"]
+    BACKEND -->|"Qdrant"| QI["index.rs:142<br/>index_qdrant(config, build)"]
+
+    MI --> CONNECT["milvus_store.rs::MilvusStore::connect()"]
+    MI --> ENSUREC["milvus_store.rs<br/>ensure_collection()"]
+    MI --> REC["schema.rs:98<br/>records_from_chunks(&build.chunks)"]
+    REC --> CTR["schema.rs:86<br/>chunk_to_record(chunk)"]
+    CTR --> PK["★ schema.rs:123<br/>stable_pk(chunk_id)<br/>SHA-1 → 63 位正整数"]
+    MI --> UPSERT["milvus_store.rs:624<br/>upsert_records(&records)"]
+    MI --> CNT["milvus_store.rs<br/>count()"]
+
+    QI --> REC
+    QI --> QUPSERT["qdrant_store.rs:216<br/>upsert_records(&records)"]
+    QI --> QUUID["★ qdrant_store.rs:385<br/>stable_uuid(chunk_id)<br/>必须是合法 UUID"]
+
+    PK --> UPSERT
+    QUUID --> QUPSERT
+
+    style PK fill:#ffe6e6,stroke:#d94a4a,stroke-width:2px
+    style QUUID fill:#ffe6e6,stroke:#d94a4a,stroke-width:2px
+    style ENSUREC fill:#fff4e6,stroke:#e8a33d
+```
+
+### ★ 服务端混合检索：两条路在 Milvus 内部汇合
+
+**关键：BM25 是在服务端跑的**（`EmbeddedText` 让 Milvus 自己把文本转成稀疏向量），客户端只发一次请求、拿一个融合分。
+
+```mermaid
+flowchart TD
+    HANDLER["api/handlers.rs:147<br/>hybrid()"] --> EMB["LocalEmbedder<br/>问题 → 384 维向量"]
+    HANDLER --> SH["milvus_store.rs:538<br/>search_hybrid(query, query_text, k, per_path_k, filter)"]
+
+    SH --> DENSE["SubSearchRequest<br/>vector_field + vectors"]
+    SH --> SPARSE["SubSearchRequest<br/>sparse_field + ★ EmbeddedText(query_text)"]
+    DENSE --> SUB["sub_requests（已 build 的，不是 builder）"]
+    SPARSE --> SUB
+    SUB --> REQ["HybridSearchRequest"]
+    REQ --> SRV["Milvus 服务端<br/>稠密 ANN + BM25 倒排"]
+    SRV --> RRF["★ 服务端 RRF 融合（k=60）"]
+
+    RRF --> RES["SearchResponse"]
+    RES --> CONS["milvus_store.rs:232<br/>★ ConsistencyLevel::Strong"]
+    CONS --> NORM["milvus_store.rs:902<br/>normalize_score(raw, metric)"]
+    NORM --> HITS["Vec<SearchHit>"]
+
+    NOTE["⚠️ 因为是服务端融合<br/>客户端拿不到 dense / BM25 分项<br/>→ 只能拿到融合后的 RRF 分"]
+
+    style CONS fill:#ffe6e6,stroke:#d94a4a,stroke-width:2px
+    style RRF fill:#fff4e6,stroke:#e8a33d
+    style NOTE fill:#ffe6e6,stroke:#d94a4a
+```
+
+### 两个必踩的坑：写进去读不到 + 重复灌库膨胀
+
+```mermaid
+flowchart TD
+    subgraph P1["坑 ① 写完立刻查，只能读到 1~2 条"]
+        A1["SDK 的 ConsistencyLevel::Bounded"] --> A2["★ 被映射成字面 guarantee_ts = 2"]
+        A2 --> A3["服务端按「远古快照」读<br/>→ 新写的看不见"]
+        A3 --> FIX["✓ 改用 ConsistencyLevel::Strong<br/>（= guarantee_ts 0，按最新提交读）"]
+    end
+
+    subgraph P2["坑 ② 重复灌库，count(*) 线性膨胀"]
+        B1["主键用自增序号"] --> B2["★ 每次灌库都是新主键<br/>→ 11 条变 55 条"]
+        B2 --> FIX2["✓ 主键从 chunk_id 稳定派生<br/>Milvus: stable_pk() → 63 位正整数<br/>Qdrant: stable_uuid() → 合法 UUID"]
+    end
+
+    style A2 fill:#ffe6e6,stroke:#d94a4a,stroke-width:2px
+    style FIX fill:#e8f5e9,stroke:#4caf50,stroke-width:2px
+    style B2 fill:#ffe6e6,stroke:#d94a4a,stroke-width:2px
+    style FIX2 fill:#e8f5e9,stroke:#4caf50,stroke-width:2px
+```
+
+### 同题对照：Milvus ↔ Qdrant
+
+**两个后端跑同一份索引，比较的是「重叠度」而不是「谁更强」。**
+
+```mermaid
+flowchart TD
+    CMP["api/handlers.rs:189<br/>compare()"] --> MS["handlers.rs:334<br/>compare_milvus(state, question, top_k)"]
+    CMP --> QS["handlers.rs:406<br/>compare_qdrant(state, question, top_k)"]
+
+    MS --> MH["milvus_store.rs:538<br/>search_hybrid()"]
+    QS --> QH["qdrant_store.rs::search()"]
+
+    MH --> MOVER["Milvus 命中列表"]
+    QH --> QOVER["Qdrant 命中列表"]
+    MOVER --> OVER["handlers.rs:283<br/>compute_overlap()"]
+    QOVER --> OVER
+    OVER --> RATIO["重叠度 = 1.00<br/>（同题同向量库，结果应当一致）"]
+
+    style RATIO fill:#e8f5e9,stroke:#4caf50,stroke-width:2px
+```
+
 ## 知识地图
 
 ```mermaid

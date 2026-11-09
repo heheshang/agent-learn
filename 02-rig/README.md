@@ -211,6 +211,119 @@ graph LR
 
 ---
 
+## 代码调用详细流程图（函数级）
+
+> 节点写的是**真实函数名**，边上标的是**调用点行号**。全部对着源码。
+
+### ★ 最底层：一次模型调用
+
+```mermaid
+flowchart TD
+    MAIN["main.rs:19<br/>main()"] --> MC["model_call.rs:30<br/>single_turn()"]
+    MAIN --> MC2["model_call.rs:52<br/>multi_turn()"]
+    MAIN --> RAW["model_call.rs:77<br/>raw_tool_call()"]
+
+    MC --> CLIENT["model_call.rs:23<br/>model() → deepseek::from_env()"]
+    CLIENT --> COMP["client.completion(DEEPSEEK_V4_FLASH)"]
+    COMP --> REQ["CompletionRequest::new(prompt)<br/>.preamble().temperature().max_tokens()"]
+    REQ --> CALL["★ Model::call(request)"]
+    CALL --> RESP["CompletionResponse<br/>text + finish_reason"]
+    RESP --> TXT["response.text()"]
+
+    NOTE["★ 这一层**没有** Agent<br/>没有工具、没有循环、没有状态<br/>只是「发一次请求，收一次响应」"]
+
+    style CALL fill:#e8f4ff,stroke:#4a90d9,stroke-width:2px
+    style NOTE fill:#fff4e6,stroke:#e8a33d
+```
+
+### Agent 的构造：工具是**逐个**注册的
+
+**关键约束**：`Tool` 要求 `Sized`，不是 trait object，所以 `AgentBuilder::tool` 是泛型方法 —— 只能一个个加，不能传一个 `Vec<Box<dyn Tool>>`。
+
+```mermaid
+flowchart TD
+    BA["agent.rs:33<br/>build_agent()"] --> BAW["agent.rs:41<br/>build_agent_with(with_whoami)"]
+    BAW --> CLIENT["deepseek::from_env()?"]
+    CLIENT --> MODEL["client.completion(DEEPSEEK_V4_FLASH)"]
+    MODEL --> BUILDER["AgentBuilder::new(model)<br/>.name().description().preamble()<br/>.default_max_turns(8)"]
+    BUILDER --> T1["★ .tool(AddTwo)<br/>泛型方法，逐个注册"]
+    BUILDER --> T2[".tool(GetWeather)"]
+    BUILDER --> T3[".tool(CountCalls::default())"]
+    BUILDER --> COND{"with_whoami?"}
+    COND -->|"是"| T4[".tool(Whoami)"]
+    COND -->|"否"| SKIP["不注册"]
+
+    T1 --> BUILD["builder.build() → Agent"]
+    T2 --> BUILD
+    T3 --> BUILD
+    T4 --> BUILD
+    SKIP --> BUILD
+
+    MAIN2["main.rs:19<br/>main()"] --> AT["agent.rs:71<br/>agent_with_tools()"]
+    AT --> BA2["build_agent_with(true)"]
+    BA2 --> BUILD
+
+    style T1 fill:#ffe6e6,stroke:#d94a4a,stroke-width:2px
+    style BUILD fill:#e8f4ff,stroke:#4a90d9,stroke-width:2px
+```
+
+### 工具是怎么被调用的
+
+**Rig 的 `Tool` trait 有三个必答方法**：名字、参数 Schema、执行。**执行返回 `impl Future`** —— 所以工具天然是异步的。
+
+```mermaid
+flowchart TD
+    PROMPT["Agent::prompt(text)"] --> LOOP["rig 内部的工具循环<br/>（对用户不可见）"]
+    LOOP --> MODEL["Model::call()"]
+    MODEL --> TC{"模型要调工具?"}
+    TC -->|"否"| ANS["最终答案"]
+    TC -->|"是"| FIND["按 NAME 找到对应的 Tool"]
+    FIND --> DESC["tools.rs:71<br/>Tool::description()"]
+    FIND --> PARAM["tools.rs:75<br/>Tool::parameters()<br/>→ JSON Schema"]
+    FIND --> EXEC["★ tools.rs:83<br/>Tool::call(&mut ToolContext, Args)"]
+    EXEC --> ARGS["按 Args 类型反序列化<br/>（serde）"]
+    ARGS --> FUTURE["返回 impl Future<Output = Result<Output, Error>>"]
+    FUTURE --> RESULT["Result"]
+    RESULT --> BACK["结果回填成 tool_result 消息"]
+    BACK --> LOOP
+
+    style EXEC fill:#e8f4ff,stroke:#4a90d9,stroke-width:2px
+    style FUTURE fill:#fff4e6,stroke:#e8a33d
+```
+
+### `ToolContext`：工具怎么读到宿主的数据
+
+```mermaid
+flowchart LR
+    HOST["宿主代码"] --> CTX["ToolContext"]
+    CTX --> SLOT["ContextValue 槽位<br/>（用类型本身当 key）"]
+    CTX --> TOOL["tools.rs:116<br/>Whoami 工具<br/>#[rig(context)] 拿到引用"]
+    TOOL --> READ["读 SessionUser"]
+
+    NOTE["★ 工具的**四问**决定模型调不调它：<br/>叫什么 / 什么时候用 / 要什么参数 / 返回什么"]
+
+    style CTX fill:#e8f4ff,stroke:#4a90d9,stroke-width:2px
+    style NOTE fill:#fff4e6,stroke:#e8a33d
+```
+
+### Middleware：作用在哪个边界上
+
+```mermaid
+flowchart TB
+    MW["middleware.rs:106<br/>middleware_demo()"] --> CLIENT["middleware.rs:92<br/>client_with_middleware()"]
+    CLIENT --> LL["middleware.rs:35<br/>LatencyLogger<br/>after_response"]
+    CLIENT --> TH["middleware.rs:70<br/>TraceHeader<br/>before_request_headers"]
+
+    LL --> WIRE["在线缆层：记录耗时"]
+    TH --> WIRE2["在线缆层：注入追踪头"]
+
+    NOTE["★ middleware 是**线缆层**的东西<br/>装在 OpenAI client 上<br/>不是 Agent、也不是工具"]
+
+    style WIRE fill:#e8f5e9,stroke:#4caf50
+    style WIRE2 fill:#e8f5e9,stroke:#4caf50
+    style NOTE fill:#fff4e6,stroke:#e8a33d
+```
+
 ## 一、模型与消息调用
 
 Rig 的最底层三个概念：

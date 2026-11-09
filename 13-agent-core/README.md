@@ -319,6 +319,135 @@ Final Answer: 在 ReAct 框架中...      ← 模型自己的
 
 ---
 
+## 代码调用详细流程图（函数级）
+
+> 节点写的是**真实函数名**，边上标的是**调用点行号**。全部对着源码。
+
+### ★ `Agent::run_with_mode()` 的完整调用链
+
+**红色节点是「容易写错」的地方。**
+
+```mermaid
+flowchart TD
+    RUN["agent.rs:453<br/>Agent::run(question)"] --> RWM["agent.rs:467<br/>run_with_mode(question, mode)"]
+    RWM --> MODE{"mode.uses_tools()?"}
+    MODE -->|"Direct"| NOTOOL["Vec::new()<br/>★ 提示词里也不能出现 Action: 行"]
+    MODE -->|"ActOnly / ReAct"| ACTIVE["agent.rs:479<br/>self.tools.clone()"]
+    NOTOOL --> SPECS
+    ACTIVE --> SPECS["agent.rs:727<br/>tool_specs_of(&active_tools)"]
+
+    SPECS --> ASM["prompt.rs:315<br/>assemble(mode, specs, question, trajectory, few_shot)"]
+    ASM --> SYSP["prompt.rs:287<br/>system_prompt_for(mode)"]
+    ASM --> FEW["prompt.rs:301<br/>few_shot_for(mode, enabled)"]
+    SYSP -->|"ActOnly 单独一份"| ACTP["prompt.rs:259<br/>act_only_system_prompt()"]
+    FEW -->|"ActOnly 单独一份"| FEWA["★ 不带 Thought: 的 few-shot"]
+
+    ASM --> CHAT["llm.rs::Llm::chat(system, user)"]
+    CHAT --> RAW["模型原始输出"]
+    RAW --> PARSE["★ agent.rs:507<br/>parse_react_output(raw)"]
+
+    PARSE --> FINAL["ParsedOutput::FinalAnswer"]
+    PARSE --> ACTION["ParsedOutput::Action"]
+    PARSE --> UNSTR["ParsedOutput::Unstructured<br/>容错当成答案"]
+
+    ACTION --> RT["agent.rs:582<br/>run_tool_in(&active_tools, tool, args)"]
+    RT --> FIND{"tools.iter().find(spec().name == name)"}
+    FIND -->|"找不到"| UNK["ToolOutcome::failed()<br/>「未知工具，可用工具：…」"]
+    FIND -->|"找得到"| RUN["tools.rs::Tool::run(args)"]
+    RUN --> SEARCH["tools.rs:239<br/>SearchTool（BM25）"]
+    RUN --> CALC["tools.rs:305<br/>CalculateTool"]
+
+    UNK --> OBS
+    SEARCH --> OBS
+    CALC --> OBS
+
+    OBS["★ agent.rs:616<br/>ToolOutcome → Observation<br/>失败也变成观察，不中断"]
+    OBS --> TRAJ["trajectory 累加<br/>Thought / Action / Action Input / Observation"]
+    TRAJ --> RWM
+
+    RWM -->|"步数用尽"| COLLECT["agent.rs:640<br/>发起收尾调用"]
+    COLLECT --> FINALCALL["agent.rs:667<br/>再问一次模型"]
+    FINALCALL --> DEGRADE{"收尾调用失败?"}
+    DEGRADE -->|"是"| FALLBACK["★ agent.rs:约 680<br/>降级：用已收集的观察当答案<br/>不丢前面几步"]
+    DEGRADE -->|"否"| DONE(["返回 AgentRun"])
+
+    style RWM fill:#e8f4ff,stroke:#4a90d9,stroke-width:2px
+    style PARSE fill:#ffe6e6,stroke:#d94a4a,stroke-width:2px
+    style OBS fill:#ffe6e6,stroke:#d94a4a,stroke-width:2px
+    style FALLBACK fill:#ffe6e6,stroke:#d94a4a,stroke-width:2px
+    style NOTOOL fill:#fff4e6,stroke:#e8a33d
+    style FEWA fill:#fff4e6,stroke:#e8a33d
+```
+
+### `parse_react_output()`：为什么必须用 `rfind`
+
+**这张图是 13 最值得记住的一张。** 上一步的工具被重跑、真正的答案被丢弃，根因就在这里。
+
+```mermaid
+flowchart TD
+    IN["模型输出（含回显）"] --> FA{"find_last_marker<br/>('Final Answer:')<br/>★ 用 rfind 不用 find"}
+    FA -->|"找到"| OUTFA["ParsedOutput::FinalAnswer<br/>模型真正的答案"]
+    FA -->|"没找到"| TH["extract_thought(text)"]
+    TH --> AC{"find_last_marker('Action:')"}
+    AC -->|"找到"| AIN["find_last_marker(rest, 'Action Input:')"]
+    AIN --> JSON["parse_action_input(raw)"]
+    JSON --> OK{"合法 JSON?"}
+    OK -->|"是"| OUTA["ParsedOutput::Action"]
+    OK -->|"带代码围栏"| STRIP["剥围栏再解析"]
+    OK -->|"不是 JSON"| FALLBACK["当成 query 字符串<br/>（不报错，继续跑）"]
+    AC -->|"没找到"| OUTU["ParsedOutput::Unstructured"]
+
+    style FA fill:#ffe6e6,stroke:#d94a4a,stroke-width:2px
+    style AC fill:#ffe6e6,stroke:#d94a4a,stroke-width:2px
+    style FALLBACK fill:#fff4e6,stroke:#e8a33d
+```
+
+对照一下 `find` 与 `rfind` 的差别：
+
+```mermaid
+flowchart LR
+    TXT["模型输出：<br/>Action: search ← 回显的旧动作<br/>Action Input: {...} ← 回显<br/>Thought: 第一条片段…<br/>Final Answer: 真正的答案"]
+
+    TXT --> FIND["❌ find() → 第一个匹配<br/>→ 命中回显里的旧 Action<br/>→ 上一步工具被重跑<br/>→ 真答案被丢弃"]
+    TXT --> RFIND["✅ rfind() → 最后一个匹配<br/>→ 命中模型自己的 Final Answer<br/>→ 答案正确"]
+
+    style FIND fill:#ffe6e6,stroke:#d94a4a
+    style RFIND fill:#e8f5e9,stroke:#4caf50
+```
+
+### 三模式消融：只有一个变量不同
+
+**这是 13 最重要的实验设计** —— 三种模式跑在**同一个 Agent 实例**上，只有 `mode` 变量变。
+
+```mermaid
+flowchart TD
+    CMP["main.rs:185<br/>compare_demo(question)"] --> M1["Direct"]
+    CMP --> M2["ActOnly"]
+    CMP --> M3["ReAct"]
+
+    M1 --> C1["cfg.mode = Direct"]
+    M2 --> C2["cfg.mode = ActOnly"]
+    M3 --> C3["cfg.mode = ReAct"]
+
+    C1 --> A1["Agent::run_with_mode(q, Direct)"]
+    C2 --> A2["Agent::run_with_mode(q, ActOnly)"]
+    C3 --> A3["Agent::run_with_mode(q, ReAct)"]
+
+    A1 --> P1["prompt.rs:277<br/>direct_system_prompt()<br/>无工具、无 Action: 行"]
+    A2 --> P2["prompt.rs:259<br/>act_only_system_prompt()<br/>★ 不带 Thought: 的 few-shot"]
+    A3 --> P3["prompt.rs:233<br/>react_system_prompt()<br/>完整 Thought/Action"]
+
+    A1 --> T1["工具集 = 空"]
+    A2 --> T2["工具集 = search + calculate"]
+    A3 --> T3["工具集 = search + calculate"]
+
+    style P1 fill:#fff4e6,stroke:#e8a33d
+    style P2 fill:#fff4e6,stroke:#e8a33d,stroke-width:2px
+    style P3 fill:#fff4e6,stroke:#e8a33d
+```
+
+---
+
 ## 时序图
 
 ```mermaid

@@ -345,6 +345,103 @@ flowchart LR
 
 ---
 
+## 代码调用详细流程图（函数级）
+
+> 节点写的是**真实函数名**，边上标的是**调用点行号**。全部对着源码。
+
+### ★ 索引构建链路
+
+```mermaid
+flowchart TD
+    MAIN["main.rs:198<br/>run_build_demo()"] --> CFG["main.rs:59<br/>index_config()"]
+    MAIN --> EMB["main.rs:108<br/>make_embedder()"]
+    MAIN --> BUILD["pipeline.rs:63<br/>build_chunks(embedder, config)"]
+
+    BUILD --> LOAD["04-rag::loader::load_directory(data_dir)"]
+    BUILD --> SPLIT["04-rag::splitter::StructureAwareSplitter<br/>.split(doc, &counter)"]
+    BUILD --> EC["embed.rs:367<br/>embedder.embed_chunks(raw_chunks)"]
+    EC --> PREFIX["加 passage: 前缀"]
+    PREFIX --> INFER["fastembed::EmbeddingModel::embed()"]
+    INFER --> NORM["embed.rs:391<br/>l2_normalize(v)<br/>归一化后余弦 == 内积"]
+    NORM --> EC2["EmbeddedChunk[]<br/>id + vector + heading_path"]
+
+    EC2 --> PATH["pipeline.rs:101<br/>index_path(config)"]
+    EC2 --> ADD["store.add(&build.chunks)"]
+    ADD --> FS["FaissStore<br/>IndexFlat / IVF / HNSW"]
+    ADD --> CS["ChromaStore<br/>HTTP + 元数据"]
+    FS --> SAVE["持久化<br/>index.faiss + index.faiss.meta.json"]
+    CS --> SAVE2["持久化<br/>Chroma 目录"]
+
+    MAIN --> PERSIST["main.rs:390<br/>run_persist_demo()"]
+    PERSIST --> LOAD2["store.load()"]
+
+    style BUILD fill:#e8f4ff,stroke:#4a90d9,stroke-width:2px
+    style NORM fill:#ffe6e6,stroke:#d94a4a,stroke-width:2px
+    style PREFIX fill:#fff4e6,stroke:#e8a33d
+```
+
+### 查询链路：前缀不一样，召回率天差地别
+
+**这是 05 最容易踩且最难发现的坑** —— 用错前缀**不会有任何报错**，只是默默变差。
+
+```mermaid
+flowchart TD
+    Q["查询文本"] --> EQ["embed.rs:374<br/>embedder.embed_query(text)"]
+    EQ --> QP["★ 加 query: 前缀<br/>（非对称模型要求）"]
+    QP --> QNORM["l2_normalize()"]
+    QNORM --> VS["store.lock().await<br/>VectorStore::search(vector, k)"]
+    VS --> HIT["SearchHit { id, score, source, heading_path }"]
+
+    D["文档文本"] --> ED["embed.rs:367<br/>embed_documents(texts)"]
+    ED --> DP["★ 加 passage: 前缀"]
+    DP --> DNORM["l2_normalize()"]
+    DNORM --> FAISS["FaissStore 索引里存的是这个"]
+
+    NOTE["⚠️ 查询和文档的向量**必须在同一个空间**<br/>前缀错了 → 两个空间 → 召回全乱<br/>而且没有任何报错"]
+
+    style QP fill:#ffe6e6,stroke:#d94a4a,stroke-width:2px
+    style DP fill:#ffe6e6,stroke:#d94a4a,stroke-width:2px
+    style NOTE fill:#fff4e6,stroke:#e8a33d
+```
+
+### 为什么归一化：余弦 == 内积
+
+```mermaid
+flowchart LR
+    V["原始向量"] --> NORM["embed.rs:391<br/>l2_normalize(v)"]
+    NORM --> UNIT["模长 = 1"]
+    UNIT --> COS["embed.rs:401<br/>cosine_similarity(a, b)<br/>= a · b"]
+    UNIT --> IP["★ 可以直接用 FAISS 的<br/>InnerProduct 索引"]
+
+    NOTE["归一化后：<br/>余弦相似度 == 内积<br/>→ 可以用更快的内积索引"]
+
+    style NORM fill:#e8f5e9,stroke:#4caf50,stroke-width:2px
+    style IP fill:#e8f5e9,stroke:#4caf50
+    style NOTE fill:#fff4e6,stroke:#e8a33d
+```
+
+### 两个后端：同一个 trait，不同实现
+
+```mermaid
+flowchart TB
+    TRAIT["store/mod.rs:143<br/>trait VectorStore"]
+    TRAIT --> ADD["async fn add(&mut self, chunks)"]
+    TRAIT --> SEARCH["async fn search(&mut self, q, k)"]
+    TRAIT --> COUNT["async fn count()"]
+
+    ADD --> FA["FaissStore<br/>store/faiss_store.rs:220"]
+    ADD --> CH["ChromaStore<br/>store/chroma_store.rs:332"]
+
+    SEARCH --> FA
+    SEARCH --> CH
+
+    FA --> META["★ 索引 + 元数据分开存<br/>index.faiss + index.faiss.meta.json<br/>IDMap 前缀让 ID 随索引持久化"]
+    CH --> HTTP["HTTP + 元数据过滤<br/>search_filtered()"]
+
+    style TRAIT fill:#e8f4ff,stroke:#4a90d9,stroke-width:2px
+    style META fill:#ffe6e6,stroke:#d94a4a,stroke-width:2px
+```
+
 ## 一、Embedding 原理
 
 ### 1.1 从 one-hot 到 dense

@@ -529,6 +529,95 @@ if max_len > 120 { return false; }
 
 ---
 
+## 代码调用详细流程图（函数级）
+
+> 节点写的是**真实函数名**，边上标的是**调用点行号**。全部对着源码。
+
+### ★ 文档解析的完整调用链
+
+**顺序很重要**：表格必须**先于**段落合并处理，否则单元格会被当成行、再被当成段落，结构就没了。
+
+```mermaid
+flowchart TD
+    MAIN["main.rs:85<br/>run_demo()"] --> PF["parser/pipeline.rs:160<br/>parse_file(path, config)"]
+    PF --> PDF["parser/pdf.rs:123<br/>parse_pdf(path)"]
+    PF --> IMG["parser/image.rs:131<br/>extract_images(path, asset_dir, options)"]
+    PF --> PD["parser/pipeline.rs:174<br/>parse_document(pdf, images, config)"]
+
+    PD --> LOOP["for page in pdf.pages"]
+    LOOP --> DT["★ parser/pipeline.rs:194<br/>detect_tables(page, table_options)"]
+    DT --> LT["parser/table.rs:478<br/>looks_like_table(cells)"]
+    DT --> RT["parser/table.rs:388<br/>reconstruct_table(cells, page_no, options)"]
+    RT --> BG["parser/table.rs:264<br/>build_grid(cells, options)<br/>几何聚类 → 网格"]
+
+    DT --> REMAIN["把表格区域从行流里摘掉"]
+    REMAIN --> AP["parser/layout.rs:156<br/>analyze_page(remaining, layout_options)"]
+    AP --> ML["parser/layout.rs:352<br/>merge_lines(...)"]
+
+    ML --> ELEMENTS["DocumentElement 列表"]
+    ELEMENTS --> DOC["ParsedDocument"]
+    IMG --> DOC
+
+    MAIN --> CHUNK["parser/chunk.rs:152<br/>chunk_document(doc, options)"]
+    DOC --> CHUNK
+    CHUNK --> KIND{"元素类型?"}
+    KIND -->|"表格"| TB["★ 表格独立成块<br/>heading_path 后续归并补上"]
+    KIND -->|"段落"| TX["文本块"]
+    KIND -->|"图片"| IM["图片块<br/>（无描述则不可检索）"]
+
+    MAIN --> MD["parser/pipeline.rs:557<br/>to_markdown(doc)"]
+    MAIN --> FLAT["parser/pipeline.rs:545<br/>flatten_to_text(pdf)<br/>对照组：压平"]
+
+    style PD fill:#e8f4ff,stroke:#4a90d9,stroke-width:2px
+    style DT fill:#ffe6e6,stroke:#d94a4a,stroke-width:2px
+    style RT fill:#ffe6e6,stroke:#d94a4a
+    style TB fill:#fff4e6,stroke:#e8a33d,stroke-width:2px
+```
+
+### 表格为什么必须独立成块
+
+**PDF 里只有坐标，没有表格。** 表格是几何聚类**推断**出来的，所以一旦和段落混在一起处理，结构信息就永久丢失了。
+
+```mermaid
+flowchart TD
+    CELLS["单元格文本 + 坐标"] --> LOOK["table.rs:478<br/>looks_like_table(cells)<br/>（行列数启发式）"]
+    LOOK -->|"不像表格"| SKIP["跳过，当普通文本"]
+    LOOK -->|"像表格"| RECON["table.rs:388<br/>reconstruct_table(cells, page_no, options)"]
+    RECON --> GRID["table.rs:264<br/>build_grid()<br/>按行/列容差聚类"]
+    GRID --> OK{"网格建得出来?"}
+    OK -->|"否"| SKIP2["降级：按普通文本处理"]
+    OK -->|"是"| TABLE["Table 结构<br/>（行 × 列的二维网格）"]
+    TABLE --> CHUNK["chunk.rs:152<br/>表格独立成一个块"]
+
+    CHUNK --> HD["★ heading_path 需要事后归并<br/>（按 y 坐标 + 文字元素排序）"]
+
+    style RECON fill:#ffe6e6,stroke:#d94a4a,stroke-width:2px
+    style HD fill:#fff4e6,stroke:#e8a33d
+```
+
+### 对照实验：几何还原 vs 压平
+
+**这是 11 唯一需要模型参与的地方 —— 而且是可以关掉的。**
+
+```mermaid
+flowchart TD
+    CMP["main.rs:150<br/>run_compare()"] --> GEOM["几何还原路线"]
+    CMP --> FLAT["压平路线"]
+
+    GEOM --> G1["parse_file()"] --> G2["★ 表格独立成块"]
+    G2 --> G3["表格块 + 文本块"]
+
+    FLAT --> F1["flatten_to_text(pdf)"] --> F2["所有内容压成纯文本"]
+    F2 --> F3["普通文本块"]
+
+    G3 --> VG["compare.rs / handlers.rs<br/>build_verdict()"]
+    F3 --> VG
+    VG --> OUT["对比结论<br/>表格是否被保留为结构"]
+
+    style G2 fill:#e8f5e9,stroke:#4caf50,stroke-width:2px
+    style F1 fill:#ffe6e6,stroke:#d94a4a
+```
+
 ## 图片处理：图片不能直接检索
 
 向量模型吃文本。图片进入知识库的唯一路径：

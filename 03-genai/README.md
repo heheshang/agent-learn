@@ -273,6 +273,110 @@ make all      # 全部
 
 ---
 
+## 代码调用详细流程图（函数级）
+
+> 节点写的是**真实函数名**，边上标的是**调用点行号**。全部对着源码。
+
+### 模型层：一次 `exec_chat` 到底发生了什么
+
+```mermaid
+flowchart TD
+    MAIN["main.rs:39<br/>main()"] --> CHAT["model_demo.rs:258<br/>run_chat_demos()"]
+    MAIN --> TOOLS["model_demo.rs:267<br/>run_tool_demos()"]
+    MAIN --> AGENT["agent_demo.rs:185<br/>run_agent_demo()"]
+
+    CHAT --> ST["model_demo.rs:24<br/>run_single_turn()"]
+    CHAT --> MT["model_demo.rs:65<br/>run_multi_turn()"]
+    CHAT --> SSE["model_demo.rs:101<br/>run_streaming()"]
+    CHAT --> JSON["model_demo.rs:119<br/>run_json_mode()"]
+
+    ST --> BUILD["ChatRequest::new(vec![system, user])"]
+    BUILD --> EXEC["★ genai::Client::exec_chat(model, req, None)"]
+    MT --> EXEC
+    SSE --> EXEC
+    JSON --> EXEC
+    EXEC --> ADAPT["genai 内部：选适配器<br/>（DeepSeek / OpenAI / …）"]
+    ADAPT --> HTTP["HTTP 请求到厂商 API"]
+    HTTP --> RES["ChatResponse<br/>text + usage + stop_reason"]
+    RES --> FIRST["first_text()"]
+
+    style EXEC fill:#e8f4ff,stroke:#4a90d9,stroke-width:2px
+    style ADAPT fill:#fff4e6,stroke:#e8a33d
+```
+
+### 原始工具调用：手工执行 + 回填
+
+**注意：genai 不会替你执行工具。** 它只是把「模型想调什么」结构化地告诉你，**执行和回填是你自己的事**。
+
+```mermaid
+flowchart TD
+    TOOLS["model_demo.rs:267<br/>run_tool_demos()"] --> RAW["model_demo.rs:157<br/>run_raw_tool_call()"]
+    RAW --> DECL["声明工具<br/>calculate_schema()"]
+    DEC --> REQ["ChatRequest 带 tools"]
+    REQ --> EXEC["exec_chat()"]
+    EXEC --> TC{"响应里有 tool_calls?"}
+    TC -->|"没有"| TXT["普通文本回复"]
+    TC -->|"有"| MANUAL["★ 手工解析参数"]
+    MANUAL --> CALC["tools.rs:28<br/>calculate(expression)<br/>自写算术求值器"]
+    CALC --> BACK["把结果作为 tool 消息回填"]
+    BACK --> REQ
+
+    NOTE["⚠️ 「工具」这件事本身没有魔法<br/>genai 只负责结构化地传参<br/>执行 + 回填都是你的代码"]
+
+    style MANUAL fill:#ffe6e6,stroke:#d94a4a,stroke-width:2px
+    style NOTE fill:#fff4e6,stroke:#e8a33d
+```
+
+### Agent 层：`create_agent` 组装了什么
+
+```mermaid
+flowchart TD
+    AGENT["agent_demo.rs:104<br/>create_agent(with_hooks)"] --> CLIENT["genai::Client::builder().build()"]
+    AGENT --> STATE["AgentState<br/>model + system_prompt + tools"]
+    STATE --> CT["agent_demo.rs:36<br/>calculate_tool()"]
+    STATE --> CNT["agent_demo.rs:73<br/>counting_tool()"]
+    CT --> SCHEMA["tools.rs:137<br/>calculate_schema()"]
+    CNT --> SCHEMA2["工具自己的 JSON Schema"]
+
+    STATE --> CFG["AgentConfig::default()<br/>.with_initial_state(state)<br/>.with_stream_fn(GenaiStreamFn)"]
+    CFG --> HOOKS{"with_hooks?"}
+    HOOKS -->|"是"| BEFORE["★ .with_before_tool_call()<br/>改写 ctx.args"]
+    HOOKS -->|"是"| AFTER[".with_after_tool_call()"]
+    HOOKS -->|"否"| PLAIN["不挂 middleware"]
+
+    PLAIN --> AG["Agent"]
+    BEFORE --> AG
+    AFTER --> AG
+    AG --> RUN["agent_demo.rs:185<br/>run_agent_demo()"]
+
+    NOTE["⚠️ before_tool_call 拿到的参数<br/>已经按 schema 校验并强制类型了<br/>改写 ctx.args 会直接传给工具<br/>（不会再校验一次）"]
+
+    style BEFORE fill:#ffe6e6,stroke:#d94a4a,stroke-width:2px
+    style NOTE fill:#fff4e6,stroke:#e8a33d
+```
+
+### middleware 的三个位置
+
+```mermaid
+flowchart LR
+    subgraph L["模型层"]
+        A1["ChatRequest"] --> A2["ChatResponse"]
+    end
+    subgraph T["工具层"]
+        B1["tool_call"] --> B2["tool 结果"]
+    end
+    subgraph H["HTTP 层"]
+        C1["请求体"] --> C2["响应体"]
+    end
+
+    L -.->|"on_payload / on_response"| T
+    T -.->|"before_tool_call / after_tool_call"| H
+
+    NOTE["★ middleware 是在**不同的边界**上生效<br/>装错地方 = 根本不触发"]
+
+    style NOTE fill:#ffe6e6,stroke:#d94a4a
+```
+
 ## 3. 模型层：消息与工具
 
 ### 单轮
