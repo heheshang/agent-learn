@@ -11,19 +11,19 @@
 # ============================================================================
 
 CARGO := cargo
-PKGS  := axum-01 rig-02 genai-03 rag-04 rag-05 rag-06 rag-07 rag-08 rag-09 rag-10 rag-11 rag-12 agent-13 agent-14
+PKGS  := axum-01 rig-02 genai-03 rag-04 rag-05 rag-06 rag-07 rag-08 rag-09 rag-10 rag-11 rag-12 agent-13 agent-14 agent-15 agent-16 agent-17 agent-18
 
 .DEFAULT_GOAL := help
 .PHONY: help build run test check fmt fmt-check lint clean logs \
-        01 02 03 04 05 06 07 08 09 10 11 12 13 14 \
+        01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 18 \
         axum rig genai rag agent \
-        serve-06 serve-07 serve-08 serve-09 serve-10 serve-11 serve-12 serve-13 serve-14 \
-        demo-04 demo-05 demo-06 demo-07 demo-08 demo-09 demo-10 demo-11 demo-12 demo-13 demo-14 \
-        compare-07 compare-08 compare-09 compare-10 compare-11 compare-12 compare-13 compare-14 \
-        call-14 \
+        serve-06 serve-07 serve-08 serve-09 serve-10 serve-11 serve-12 serve-13 serve-14 serve-15 serve-16 serve-17 serve-18 \
+        demo-04 demo-05 demo-06 demo-07 demo-08 demo-09 demo-10 demo-11 demo-12 demo-13 demo-14 demo-15 demo-16 demo-17 demo-18 \
+        compare-07 compare-08 compare-09 compare-10 compare-11 compare-12 compare-13 compare-14 compare-16 compare-17 compare-18 \
+        call-14 guard-15 \
         eval-12 \
         milvus-up milvus-down milvus-destroy \
-        check-mermaid \
+        check-mermaid check-toc \
         deps faiss chroma
 
 help: ## 显示本文件的所有目标
@@ -110,6 +110,21 @@ clean: ## 清理构建产物
 14: ## 14-agent-tool：直接调天气工具（不经模型）
 	$(MAKE) -C 14-agent-tool call
 
+15: ## 15-agent-sql：只跑 SQL 护栏（不执行、不调模型）★
+	$(MAKE) -C 15-agent-sql guard
+
+16: ## 16-agent-function-calling：打印工具清单 + Schema（不调模型）★
+	$(MAKE) -C 16-agent-function-calling tools
+
+17: ## 17-agent-memory：★ 线程隔离 / 恢复对照
+	$(MAKE) -C 17-agent-memory compare
+
+18: ## 18-agent-error：★ 三类错误对照（Transient/Business/Fatal）
+	$(MAKE) -C 18-agent-error compare
+
+19: ## 19-agent-summary：★ 接地校验对照（接地/部分接地/未接地）
+	$(MAKE) -C 19-agent-summary compare
+
 axum: 01 ## 别名
 rig: 02 ## 别名
 genai: 03 ## 别名
@@ -144,6 +159,21 @@ serve-13: ## 启动 13-agent-core 服务（:3060）
 
 serve-14: ## 启动 14-agent-tool 服务（:3070）
 	$(MAKE) -C 14-agent-tool serve
+
+serve-15: ## 启动 15-agent-sql 服务（:3080）
+	$(MAKE) -C 15-agent-sql serve
+
+serve-16: ## 启动 16-agent-function-calling 服务（:3090）
+	$(MAKE) -C 16-agent-function-calling serve
+
+serve-17: ## 启动 17-agent-memory 服务（:3100）
+	$(MAKE) -C 17-agent-memory serve
+
+serve-18: ## 启动 18-agent-error 服务（:3110）
+	$(MAKE) -C 18-agent-error serve
+
+serve-19: ## 启动 19-agent-summary 服务（:3120）
+	$(MAKE) -C 19-agent-summary serve
 
 mcp-14: ## 启动 14-agent-tool 内置 MCP 服务器（:3071）
 	$(MAKE) -C 14-agent-tool mcp
@@ -183,8 +213,32 @@ demo-13: ## 13-agent-core：跑一次 Agent（ReAct）
 demo-14: ## 14-agent-tool：直接调天气工具
 	$(MAKE) -C 14-agent-tool call
 
+demo-15: ## 15-agent-sql：跑一次 SQL Agent（ReAct）★
+	$(MAKE) -C 15-agent-sql run
+
+demo-16: ## 16-agent-function-calling：跑一次 Function Calling Agent ★
+	$(MAKE) -C 16-agent-function-calling run
+
+demo-17: ## 17-agent-memory：跑一次带记忆的对话（两轮）★
+	$(MAKE) -C 17-agent-memory chat
+
+demo-18: ## 18-agent-error：跑一次带错误处理的 Agent ★
+	$(MAKE) -C 18-agent-error run
+
+demo-19: ## 19-agent-summary：跑一次周度总结（研究 + 成文 + 校验）★
+	$(MAKE) -C 19-agent-summary weekly
+
+demo-19-plan: ## 19-agent-summary：跑一次项目构建方案 ★
+	$(MAKE) -C 19-agent-summary plan
+
+search-19: ## 19-agent-summary：直接调 Web 搜索工具（不经模型）★
+	$(MAKE) -C 19-agent-summary search
+
 call-14: ## 14-agent-tool：直接调天气工具（不经模型）★
 	$(MAKE) -C 14-agent-tool call
+
+guard-15: ## 15-agent-sql：只跑 SQL 护栏（不执行、不调模型）★
+	$(MAKE) -C 15-agent-sql guard
 
 compare-07: ## 07-query：多策略改写对比 ★
 	$(MAKE) -C 07-query compare
@@ -210,6 +264,18 @@ compare-13: ## 13-agent-core：三模式消融对照（direct/act_only/react）�
 compare-14: ## 14-agent-tool：三模式消融对照（工具贡献量化）★
 	$(MAKE) -C 14-agent-tool compare
 
+compare-16: ## 16-agent-function-calling：tool_choice 四档对照 ★
+	$(MAKE) -C 16-agent-function-calling compare
+
+compare-17: ## 17-agent-memory：线程隔离 / 恢复 / 跨线程共享三向对照 ★
+	$(MAKE) -C 17-agent-memory compare
+
+compare-18: ## 18-agent-error：三类错误对照（Transient/Business/Fatal）★
+	$(MAKE) -C 18-agent-error compare
+
+compare-19: ## 19-agent-summary：接地校验对照（接地/部分接地/未接地）★
+	$(MAKE) -C 19-agent-summary compare
+
 eval-12: ## 12-rag-summary：跑评估集出消融报告 ★
 	$(MAKE) -C 12-rag-summary eval
 
@@ -228,6 +294,9 @@ milvus-destroy: ## 停止并删除 Milvus 数据卷
 
 check-mermaid: ## 校验所有 README 的 mermaid 图能正常渲染
 	@bash scripts/check-mermaid.sh
+
+check-toc: ## 校验所有 README 的目录锚点链接有效
+	@python3 scripts/check-toc-links.py
 
 deps: ## 检查系统依赖
 	@echo "==> FAISS (05/06/07/08/09 需要)"; $(MAKE) -C 05-rag deps

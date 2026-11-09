@@ -19,6 +19,11 @@
 12-rag-summary RAG Part 9：摘要式 RAG（混合检索 + Reranker + Milvus + 上下文压缩）
 13-agent-core Agent 核心概念：ReAct 循环 + 工具协议 + 三模式消融
 14-agent-tool 自定义工具开发：工具契约 + Schema 校验 + MCP 协议
+15-agent-sql  手撕 SQL Agent：SQL 安全护栏 + 只读连接 + 安全审计
+16-agent-function-calling Function Calling 实战：结构化工具调用 + tool_choice 四档消融
+17-agent-memory  手撕 Agent Memory：两级记忆（线程状态 + 长期事实）
+18-agent-error  手撕 Agent 错误处理：middleware 驱动的可诊断工具失败
+19-agent-summary 研究助手 Agent：RAG + Web 搜索 + 周报/项目构建（带接地校验）
 ```
 
 ## 思维导图：整个仓库
@@ -96,6 +101,31 @@ mindmap
         失败转观察
         MCP 协议
         return_direct
+      15-agent-sql SQL Agent
+        SQL 安全护栏
+        只读连接
+        安全审计
+        答案必须有据
+      16-agent-function-calling Function Calling
+        结构化工具调用
+        tool_calls 回执对账
+        strict 模式
+        tool_choice 四档
+      17-agent-memory Agent Memory
+        线程状态 checkpointer
+        长期事实抽取召回
+        事实合并 versions
+        两级记忆分目录
+      18-agent-error Agent 错误处理
+        Transient 重试
+        Business 直接降级
+        Fatal 终止
+        稳定错误码
+      19-agent-summary 研究助手 Agent
+        RAG + Web 搜索
+        周报与项目构建
+        接地三态校验
+        悬空引用即幻觉
     核心认知
       Loader 决定拿到什么
       Splitter 决定能检索什么
@@ -113,6 +143,11 @@ mindmap
       参数错了别发请求
       工具来源与用法解耦
       真实对话要与示例分开
+      事实只进 system 不进历史
+      两级记忆要分目录
+      失败要按类别决策
+      致命错误不能降级
+      降级也要有回执
 ```
 
 ## 全局架构全景
@@ -170,6 +205,28 @@ graph TB
         R14["14-agent-tool<br/>工具契约 + Schema 校验<br/>天气工具 · MCP 协议"]
     end
 
+    subgraph L12["SQL Agent"]
+        R15["15-agent-sql<br/>SQL 安全护栏 + 只读连接<br/>安全审计 · 答案护栏"]
+    end
+
+    subgraph L13["Function Calling 实战"]
+        R16["16-agent-function-calling<br/>结构化工具调用 + 回执对账<br/>strict 模式 · tool_choice 四档"]
+    end
+
+    subgraph L14["Agent Memory"]
+        R17["17-agent-memory<br/>线程状态 + checkpointer<br/>事实抽取 · 召回 · 合并"]
+    end
+
+    subgraph L15["Agent 错误处理"]
+        R18["18-agent-error<br/>错误分类 + 中间件决策<br/>重试 · 降级 · 终止"]
+    end
+
+    subgraph L16["研究助手 Agent"]
+        R19["19-agent-summary<br/>RAG + Web 搜索 + 报告<br/>接地三态校验"]
+    end
+
+    R18 -.错误决策复用.-> R19
+
     R4 --> R5 --> R6 --> R7 --> R8 --> R9
     R5 -.向量存储抽象.-> R10
     R9 -.指标体系.-> R10
@@ -178,10 +235,20 @@ graph TB
     R13 -.工具底座复用.-> R8
     R13 -.LLM 抽象复用.-> R7
     R14 -.ReAct 引擎复用.-> R13
+    R15 -.ReAct 引擎复用.-> R13
+    R15 -.工具底座复用.-> R14
+    R15 -.LLM 抽象复用.-> R7
+    R16 -.工具底座复用.-> R14
+    R16 -.Schema 校验复用.-> R14
+    R16 -.LLM 抽象复用.-> R7
+    R17 -.BM25 检索复用.-> R8
+    R17 -.LLM 抽象复用.-> R7
+    R18 -.结构化协议复用.-> R16
+    R18 -.Schema 校验复用.-> R14
     R14 -.LLM 抽象复用.-> R7
-    AX -.HTTP 层复用到.-> R6 & R7 & R8 & R9 & R10 & R11 & R12 & R13 & R14
-    LOG -.日志设施复用到.-> AX & R6 & R7 & R8 & R9 & R10 & R11 & R12 & R13 & R14
-    GN -.LLM 客户端.-> R6 & R7 & R8 & R9 & R13 & R14
+    AX -.HTTP 层复用到.-> R6 & R7 & R8 & R9 & R10 & R11 & R12 & R13 & R14 & R16 & R17 & R18
+    LOG -.日志设施复用到.-> AX & R6 & R7 & R8 & R9 & R10 & R11 & R12 & R13 & R14 & R16 & R17 & R18
+    GN -.LLM 客户端.-> R6 & R7 & R8 & R9 & R13 & R14 & R16 & R17 & R18
     RG -.Agent 模式.-> R6
 
     style R6 fill:#e8f5e9
@@ -192,6 +259,8 @@ graph TB
     style R12 fill:#d1c4e9
     style R13 fill:#fff9c4
     style R14 fill:#d0ebff
+    style R17 fill:#d0ebff
+    style R18 fill:#ffe0e0
 ```
 
 ### RAG 主线数据流（离线索引 + 在线查询）
@@ -289,6 +358,20 @@ graph TB
         I4["MCP 协议<br/>来源与用法解耦"]
     end
 
+    subgraph S9["15-agent-sql · 解决 「怎么让 Agent 安全地查库」"]
+        J1["SQL 安全护栏<br/>词法分析 + 白黑名单"]
+        J2["只读连接<br/>运行时兜底"]
+        J3["安全审计<br/>执行过什么 / 拦过什么"]
+        J4["答案护栏<br/>没查库就作答 → 退回"]
+    end
+
+    subgraph S10["16-agent-function-calling · 解决 「怎么让模型结构化地调工具」"]
+        K1["结构化协议<br/>tools 字段 + tool_calls"]
+        K2["回执对账<br/>每个 call_id 都要有回执"]
+        K3["strict 模式<br/>+ 本地校验兜底"]
+        K4["tool_choice 四档<br/>auto / none / required / forced"]
+    end
+
     S0 -->|"人话 ≠ 文档语言"| S1
     S1 -->|向量对精确词弱| S2
     S2 -->|收益要量化| S3
@@ -297,6 +380,7 @@ graph TB
     S5 -->|能力有了,怎么攒起来?| S6
     S6 -->|"检索流程还是写死的?"| S7
     S7 -->|"工具太糙,模型老调错"| S8
+    S8 -->|"工具能写数据库了,那安全吗?"| S9
 
     style S0 fill:#ffebee
     style S1 fill:#e8f5e9
@@ -549,6 +633,41 @@ graph LR
             N118 --> N124
         end
         N106 --> N118
+        subgraph N125["16-agent-function-calling"]
+            N126["结构化工具调用"]
+            N125 --> N126
+            N127["回执对账"]
+            N125 --> N127
+            N128["strict 模式"]
+            N125 --> N128
+            N129["tool_choice 四档"]
+            N125 --> N129
+            N130["思考内容回传"]
+            N125 --> N130
+        end
+        N106 --> N125
+        subgraph N131["18-agent-error"]
+            N132["错误三分类"]
+            N131 --> N132
+            N133["中间件决策"]
+            N131 --> N133
+            N134["可诊断观察"]
+            N131 --> N134
+            N135["回执完整性"]
+            N131 --> N135
+        end
+        N106 --> N131
+        subgraph N136["19-agent-summary"]
+            N137["RAG + Web 搜索"]
+            N136 --> N137
+            N138["周报 / 项目构建"]
+            N136 --> N138
+            N139["接地三态校验"]
+            N136 --> N139
+            N140["悬空引用即幻觉"]
+            N136 --> N140
+        end
+        N106 --> N136
     end
     N1 --> N106
     subgraph N69["核心认知"]
@@ -598,6 +717,12 @@ graph LR
         N69 --> N128
         N129["真实对话要与示例分开"]
         N69 --> N129
+        N136["失败要按类别决策"]
+        N69 --> N136
+        N137["致命错误不能降级"]
+        N69 --> N137
+        N138["降级也要有回执"]
+        N69 --> N138
     end
     N1 --> N69
 ```
@@ -702,6 +827,11 @@ RUST_LOG=warn,rag_12::retriever=debug  # 只对某个模块开 debug
 | [12-rag-summary](12-rag-summary/) | 能力有了，攒不成系统 | **摘要场景上下文越短越好；差值要可归因就得一次只加一样；服务端融合分数不可拆** |
 | [13-agent-core](13-agent-core/) | 检索流程写死，模型没话语权 | **ReAct 把思考与行动交织；谁来决定检索时机才是 RAG 与 Agent 的分水岭；解析模型输出是一半工作量** |
 | [14-agent-tool](14-agent-tool/) | 工具太糙，模型老调错 | **工具描述是模型行为的一部分，不是文档；工具失败要能自我纠正；工具来源与使用方式可以解耦** |
+| [15-agent-sql](15-agent-sql/) | 让 Agent 查库不安全 | **执行模型生成的 SQL 本身就是高危操作；任何单层防线都有盲区，叠加才可靠；答案必须能被证明有数据支撑** |
+| [16-agent-function-calling](16-agent-function-calling/) | 靠提示词让模型「调用工具」不可靠 | **走结构化协议，别靠文本正则；每个 tool_call 都必须有回执；strict 不能替代本地校验；tool_choice=none 不可靠** |
+| [17-agent-memory](17-agent-memory/) | Agent 每轮都不记得上一轮 | **短期记忆按 thread_id 隔离、长期记忆按 owner 分区；召回的事实只进 system 不进历史；事实要合并而不是追加** |
+| [18-agent-error](18-agent-error/) | 工具失败了不知道怎么办 | **重试和降级是两个正交维度；只有 Transient 该重试；致命错误不能降级；终止前也要把回执发完** |
+| [19-agent-summary](19-agent-summary/) | 工具调通了，然后呢 | **把「查资料」和「写文档」拆成两阶段；每条结论都要能追回一条证据；引用不存在的编号就是幻觉，必须在代码里判** |
 
 ## 快速开始
 
@@ -743,6 +873,33 @@ make serve-14                      # 启动 14-agent-tool 服务（:3070）
 make mcp-14                        # 启动内置 MCP 服务器（:3071）★
 make call-14 LOCATION="上海"        # 直接调天气工具（不经模型）★
 
+# 15-agent-sql：SQL Agent + 安全护栏
+make guard-15                       # 只跑 SQL 护栏（不执行、不调模型）★
+make demo-15                        # 15-agent-sql：跑一次 SQL Agent ★
+make serve-15                       # 启动 15-agent-sql 服务（:3080）
+
+# 16-agent-function-calling：结构化工具调用
+make compare-16                    # tool_choice 四档消融对照 ★
+make serve-16                       # 启动 16-agent-function-calling 服务（:3090）
+make 16                             # 打印工具清单 + Schema（不调模型）★
+
+# 17-agent-memory：Agent Memory（两级记忆）
+make compare-17                    # 线程隔离 / 恢复 / 跨线程共享三向对照 ★
+make demo-17                       # 跑一次带记忆的对话（两轮）★
+make serve-17                      # 启动 17-agent-memory 服务（:3100）
+
+# 18-agent-error：Agent 错误处理
+make compare-18                    # 三类错误对照（Transient/Business/Fatal）★
+make demo-18                       # 跑一次带错误处理的 Agent ★
+make serve-18                      # 启动 18-agent-error 服务（:3110）
+
+# 19-agent-summary：研究助手 Agent
+make compare-19                    # 接地校验对照（接地/部分接地/未接地）★
+make demo-19                       # 跑一次周度总结（研究 + 成文 + 校验）★
+make demo-19-plan                  # 跑一次项目构建方案 ★
+make search-19                     # 直接调 Web 搜索工具（不经模型）★
+make serve-19                      # 启动 19-agent-summary 服务（:3120）
+
 # 各模块独立运行
 cargo run -p axum-01                    # HTTP 服务
 cargo run -p rag-04 -- pipeline         # 加载 + 分割
@@ -761,6 +918,9 @@ cargo run -p agent-13 -- run            # 跑一次 Agent（ReAct 循环）
 cargo run -p agent-14 -- tools          # 工具清单 + 参数校验演示（不联网）
 cargo run -p agent-14 -- call get_weather '{"location":"北京"}'  # 直接调工具
 cargo run -p agent-14 -- compare        # 三模式消融对照（工具收益量化）
+cargo run -p agent-17 -- compare        # 线程隔离 / 恢复 / 跨线程共享三向对照
+cargo run -p agent-18 -- table          # 错误分类速查表（不调模型）
+cargo run -p agent-18 -- compare        # 三类错误对照（不调模型）
 
 # 测试
 cargo test --workspace
@@ -808,6 +968,9 @@ cd 08-rag && make help
 | Agent 循环 | 自实现 | ReAct 文本协议 | 思考与行动**交织**；解析模型输出是一半工作量 |
 | 工具契约 | 自实现 | Tool trait / JSON Schema | 描述是**行为**不是文档；参数错了**别发请求** |
 | 工具协议 | 自实现 | MCP / JSON-RPC 2.0 | 工具**来源**与使用方式**解耦**；camelCase 字段要 `rename` |
+| 结构化工具调用 | 自实现 | OpenAI tools / tool_calls | 每个 `tool_call` 都**必须有回执**；strict **不能**替代本地校验 |
+| Agent 记忆 | 自实现 | 线程状态 + 事实抽取 | 事实**只进 system 不进历史**；关键词召回匹配不了语义等价，要留兜底 |
+| 错误处理 | 自实现 | 错误分类 + 中间件 | 重试和降级**是两个维度**；致命错误**不能**降级；终止前**也要发回执** |
 
 ### 贯穿全仓库的六条设计原则
 
@@ -850,6 +1013,11 @@ cd 08-rag && make help
 | 13-agent-core | 3060 | `make serve-13` |
 | 14-agent-tool | 3070 | `make serve-14` |
 | 14-agent-tool（MCP） | 3071 | `make mcp-14` |
+| 15-agent-sql | 3080 | `make serve-15` |
+| 16-agent-function-calling | 3090 | `make serve-16` |
+| 17-agent-memory | 3100 | `make serve-17` |
+| 18-agent-error | 3110 | `make serve-18` |
+| 19-agent-summary | 3120 | `make serve-19` |
 
 ### 常见环境变量前缀
 
@@ -865,6 +1033,11 @@ cd 08-rag && make help
 | `SUMMARY_` | 12-rag-summary | 检索 / 重排 / 压缩配置 |
 | `AGENT_` | 13-agent-core | Agent 循环 / 模式 / 步数配置 |
 | `TOOL_` | 14-agent-tool | 工具 / MCP / 步数配置 |
+| `SQL_` | 15-agent-sql | SQL 方言 / 检查器 / 护栏配置 |
+| `FC_` | 16-agent-function-calling | 工具选择 / 严格模式 / 步数配置 |
+| `MEM_` | 17-agent-memory | 存储方式 / 召回条数 / 历史长度配置 |
+| `ERR_` | 18-agent-error | 重试次数 / 退避 / 工具选择配置 |
+| `SUM_` | 19-agent-summary | 搜索后端 / 知识库目录 / 证据条数配置 |
 
 ### 文档维护
 
@@ -902,7 +1075,17 @@ make check-mermaid    # 校验所有 README 的 mermaid 图能正常渲染
        ↓
 ⑫ 12-rag-summary 搞懂「能力怎么攒成一个系统」
        ↓
-⑬ 13-agent-core 搞懂「Agent 怎么自己决定做什么」
+⑬ 13-agent-core 搞懂「Agent 循环长什么样」
        ↓
 ⑭ 14-agent-tool 搞懂「怎么给 Agent 加工具」
+       ↓
+⑮ 15-agent-sql 搞懂「怎么让 Agent 安全地查库」
+       ↓
+⑯ 16-agent-function-calling 搞懂「怎么让模型结构化地调工具」
+       ↓
+⑰ 17-agent-memory 搞懂「Agent 怎么记住用户」
+       ↓
+⑱ 18-agent-error 搞懂「失败了到底该怎么办」
+       ↓
+⑲ 19-agent-summary 搞懂「怎么把查到的资料变成有据可查的文档」
 ```
