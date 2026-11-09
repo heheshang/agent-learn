@@ -47,6 +47,27 @@ chroma-data/
 # 抽取出来的图片（重新解析 PDF 即可再生）。
 11-rag-advance/assets/
 
+# SQLite 种子数据库（由 data/seed.sql 重新生成）。
+#
+# ⚠️ 二进制文件进 git 后每次改动都是整文件变更，且 diff 看不出改了什么。
+#    文本版的 seed.sql 才是要版本化的东西。
+15-agent-sql/data/*.db
+
+# Agent Memory 的运行时存储（会话状态 + 长期记忆）。
+#
+# ⚠️ 这是**运行时产物** —— 删掉服务就重新积累，不丢源码。
+#    里面是用户对话内容，更不该进版本库。
+17-agent-memory/data/memory/
+
+# 19-agent-summary 的周报 / 项目方案输出。
+#
+# ⚠️ 同上 —— 每次跑都会生成带时间戳的新文件，
+#    提交进去只会制造 diff 噪音（而且内容取决于当时的模型输出）。
+#
+#    知识库 `data/kb/*.md` 是**输入**，要入库；
+#    `data/reports/` 是**输出**，不入库。
+19-agent-summary/data/reports/
+
 # ── 本地环境与密钥 ──────────────────────────────────────────────────────
 .env
 .env.*
