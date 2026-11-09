@@ -1,0 +1,53 @@
+[package]
+name = "agent-16"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+agent-logging = { path = "../00-logging" }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+
+# ── HTTP API 层 ──────────────────────────────────────────────────────
+# 与 06~15 保持同一套模式：路由 → 处理器 → 状态 → 统一错误响应。
+axum = { workspace = true }
+tower-http = { workspace = true }
+
+# ── LLM 层 ──────────────────────────────────────────────────────────
+# genai 提供**原生**的 tools / tool_choice / ToolCall / ToolResponse 类型 ——
+# 这是本项目和 13/14/15 的分水岭：那几个项目靠**文本协议**
+# （模型输出 `Action: xxx` 文本，我们用正则解析），
+# 本项目走 OpenAI 规范的**结构化协议**（模型返回 JSON 工具调用）。
+genai = { workspace = true }
+
+# ── 复用 14-agent-tool（工具基础设施）──────────────────────────────
+# - `agent_14::tool`   —— Tool trait / ToolRegistry / ToolOutcome
+#                        （注册表统一负责：参数校验 + 失败转 Observation）
+# - `agent_14::schema` —— JSON Schema 子集校验器（工具契约）
+# - `agent_14::weather`—— 真·联网工具（get_weather，Open-Meteo 免 key）
+agent-14 = { path = "../14-agent-tool" }
+
+# ── 复用 13-agent-core（同步工具 + BM25 索引）──────────────────────
+# - `agent_13::tools::SearchTool` / `CalculateTool`
+#   —— 本项目用适配器把它们包成 **async** 工具（14 的工具 trait 是 async 的）
+# - `agent_13::tools::build_index` —— 从 `data/` 目录建 BM25 索引
+agent-13 = { path = "../13-agent-core" }
+
+# ── 复用 08-rag（BM25 类型 + 建索引）───────────────────────────────
+# 构造 13 的 SearchTool 需要 `Arc<Bm25Index>` —— 类型来自 08。
+# `build_bm25` 用来从 `data/` 目录建索引（CLI 和服务都要用）。
+rag-08 = { path = "../08-rag" }
+
+# ── 复用 04-rag（分块配置）───────────────────────────────────────────
+# `build_bm25` 用它来保证分块口径与向量索引一致。
+rag-04 = { path = "../04-rag" }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+# 测试 HTTP API 层时用 `tower::ServiceExt::oneshot` 直接调路由 ——
+# 不开端口，零 IO 开销。
+tower = { workspace = true }

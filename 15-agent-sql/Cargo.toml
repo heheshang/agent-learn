@@ -1,0 +1,50 @@
+[package]
+name = "agent-15"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+agent-logging = { path = "../00-logging" }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+
+# ── HTTP API 层 ──────────────────────────────────────────────────────
+# 与 06~14 保持同一套模式：路由 → 处理器 → 状态 → 统一错误响应。
+axum = { workspace = true }
+tower-http = { workspace = true }
+
+# ── LLM 层 ──────────────────────────────────────────────────────────
+genai = { workspace = true }
+
+# ── 数据库 ──────────────────────────────────────────────────────────
+# rusqlite：SQLite 的 Rust 绑定。
+#
+# `bundled` feature 会把 SQLite 源码编译进来 ——
+# 不依赖系统装 libsqlite3，换机器就能跑。
+rusqlite = { workspace = true }
+
+# ── 复用 14-agent-tool（工具基础设施）──────────────────────────────
+# - `agent_14::tool`   —— Tool trait / ToolRegistry / ToolOutcome
+#                        （注册表统一负责：参数校验 + 失败转 Observation）
+# - `agent_14::schema` —— JSON Schema 子集校验器（工具契约）
+agent-14 = { path = "../14-agent-tool" }
+
+# ── 复用 13-agent-core（ReAct 输出解析器）─────────────────────────
+# - `agent_13::agent::parse_react_output`
+#   （含「模型回显整个提示词」那个坑的修复：找**最后一个**标记）
+agent-13 = { path = "../13-agent-core" }
+
+# ── 复用 07-query（LLM 抽象）────────────────────────────────────────
+# `Llm` trait + `GenaiLlm` + `ScriptedLlm`
+# （ScriptedLlm 让整个 SQL Agent 能零网络确定性测试）
+rag-07 = { path = "../07-query" }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+# 测试 HTTP API 层时用 `tower::ServiceExt::oneshot` 直接调路由 ——
+# 不开端口，零 IO 开销。
+tower = { workspace = true }
