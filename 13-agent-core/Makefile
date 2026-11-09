@@ -42,12 +42,12 @@ serve: ## 启动 HTTP 服务（127.0.0.1:3060）
 api-run: ## 用 HTTP 端点跑一次 Agent
 	curl -s -X POST http://$(ADDR)/api/run \
 		-H 'Content-Type: application/json' \
-		-d "{\"question\": \"$(QUESTION)\"}" | python3 -m json.tool
+		-d "{\"question\": \"$(QUESTION)\"}" | python3 -m json.tool --no-ensure-ascii
 
 api-compare: ## ★ 用 HTTP 端点跑三模式对照
 	curl -s -X POST http://$(ADDR)/api/compare \
 		-H 'Content-Type: application/json' \
-		-d "{\"question\": \"$(QUESTION)\"}" | python3 -m json.tool
+		-d "{\"question\": \"$(QUESTION)\"}" | python3 -m json.tool --no-ensure-ascii
 
 # ── 质量 ────────────────────────────────────────────────────
 test: ## 跑全部测试

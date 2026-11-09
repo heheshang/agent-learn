@@ -54,22 +54,22 @@ serve: ## 启动 HTTP 服务（127.0.0.1:3070）
 	TOOL_BIND_ADDR=$(ADDR) cargo run -p $(BIN) -- serve
 
 api-tools: ## 用 HTTP 端点查工具清单
-	curl -s http://$(ADDR)/api/tools | python3 -m json.tool
+	curl -s http://$(ADDR)/api/tools | python3 -m json.tool --no-ensure-ascii
 
 api-call: ## ★ 用 HTTP 端点直接调工具
 	curl -s -X POST http://$(ADDR)/api/tools/call \
 		-H 'Content-Type: application/json' \
-		-d "{\"tool\": \"get_weather\", \"args\": {\"location\": \"$(LOCATION)\"}}" | python3 -m json.tool
+		-d "{\"tool\": \"get_weather\", \"args\": {\"location\": \"$(LOCATION)\"}}" | python3 -m json.tool --no-ensure-ascii
 
 api-run: ## 用 HTTP 端点跑一次 Agent
 	curl -s -X POST http://$(ADDR)/api/run \
 		-H 'Content-Type: application/json' \
-		-d "{\"question\": \"$(QUESTION)\"}" | python3 -m json.tool
+		-d "{\"question\": \"$(QUESTION)\"}" | python3 -m json.tool --no-ensure-ascii
 
 api-compare: ## ★ 用 HTTP 端点跑三模式对照
 	curl -s -X POST http://$(ADDR)/api/compare \
 		-H 'Content-Type: application/json' \
-		-d "{\"question\": \"$(QUESTION)\"}" | python3 -m json.tool
+		-d "{\"question\": \"$(QUESTION)\"}" | python3 -m json.tool --no-ensure-ascii
 
 # ── MCP 客户端直连演示 ────────────────────────────────────────
 #
@@ -81,12 +81,12 @@ mcp-list: ## 用 MCP 协议直连内置服务器（tools/list）
 	@echo ""
 	curl -s -X POST http://$(MCP_ADDR)/mcp \
 		-H 'Content-Type: application/json' \
-		-d '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' | python3 -m json.tool
+		-d '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' | python3 -m json.tool --no-ensure-ascii
 
 mcp-call: ## 用 MCP 协议调内置服务器的 get_weather
 	curl -s -X POST http://$(MCP_ADDR)/mcp \
 		-H 'Content-Type: application/json' \
-		-d "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"get_weather\",\"arguments\":{\"location\":\"$(LOCATION)\"}}}" | python3 -m json.tool
+		-d "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"get_weather\",\"arguments\":{\"location\":\"$(LOCATION)\"}}}" | python3 -m json.tool --no-ensure-ascii
 
 mcp-agent: ## ★ 让 Agent **通过 MCP** 调工具（需先起 MCP 服务器）
 	TOOL_ENABLE_MCP=1 TOOL_MCP_ENDPOINT=http://$(MCP_ADDR)/mcp \

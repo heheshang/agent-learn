@@ -31,7 +31,7 @@ serve: ## 启动 HTTP 服务（127.0.0.1:3050）
 	SUMMARY_BIND_ADDR=$(ADDR) cargo run -p $(BIN) -- serve
 
 reindex: ## 重建 Milvus 索引
-	curl -s -X POST http://$(ADDR)/api/reindex | python3 -m json.tool
+	curl -s -X POST http://$(ADDR)/api/reindex | python3 -m json.tool --no-ensure-ascii
 
 # ── 质量 ────────────────────────────────────────────────────
 test: ## 跑全部测试
