@@ -1,0 +1,110 @@
+[project]
+name = "agent-guide-python"
+version = "0.1.0"
+description = "AI Agent 开发工程师学习路线图（工程落地版）Python 实现 —— 与 Rust 侧 00~24 一对一"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.25",
+    "pytest-cov>=6.0",
+    "ruff>=0.9",
+    "mypy>=1.14",
+]
+
+# ============================================================================
+# workspace 成员 —— 与 Rust 侧 Cargo.toml 的 [workspace.members] 一一对应
+# ============================================================================
+[tool.uv.workspace]
+members = [
+    "00-logging",
+    "01-axum",
+    "02-rig",
+    "03-genai",
+    "04-rag",
+    "05-rag",
+    "06-rag",
+    "07-query",
+    "08-rag",
+    "09-rag-eval",
+    "10-rag-milvus",
+    "11-rag-advance",
+    "12-rag-summary",
+    "13-agent-core",
+    "14-agent-tool",
+    "15-agent-sql",
+    "16-agent-function-calling",
+    "17-agent-memory",
+    "18-agent-error",
+    "19-agent-summary",
+    "20-agent-preformence-analysis",
+    "21-agent-cache",
+    "22-agent-async",
+    "23-agent-batch",
+    "24-agent-vllm",
+]
+
+# ============================================================================
+# 依赖版本统一管理 —— 对应 Rust 侧的 [workspace.dependencies]
+#
+# ⚠️ 纪律与 Rust 侧完全一致：**依赖版本只在这里出现一处**，
+#    成员包用 ``{ workspace = true }`` 引用，避免各模块之间版本漂移。
+# ============================================================================
+[tool.uv.sources]
+agent-logging-py = { workspace = true }
+axum-01-py = { workspace = true }
+rig-02-py = { workspace = true }
+genai-03-py = { workspace = true }
+rag-04-py = { workspace = true }
+rag-05-py = { workspace = true }
+rag-06-py = { workspace = true }
+rag-07-py = { workspace = true }
+rag-08-py = { workspace = true }
+rag-09-py = { workspace = true }
+rag-10-py = { workspace = true }
+rag-11-py = { workspace = true }
+rag-12-py = { workspace = true }
+agent-13-py = { workspace = true }
+agent-14-py = { workspace = true }
+agent-15-py = { workspace = true }
+agent-16-py = { workspace = true }
+agent-17-py = { workspace = true }
+agent-18-py = { workspace = true }
+agent-19-py = { workspace = true }
+agent-20-py = { workspace = true }
+agent-21-py = { workspace = true }
+agent-22-py = { workspace = true }
+agent-23-py = { workspace = true }
+agent-24-py = { workspace = true }
+
+[build-system]
+requires = ["uv_build>=0.12.13,<0.13.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "agent_guide_python"
+module-root = "src"
+
+[tool.pytest.ini_options]
+testpaths = ["00-logging", "01-axum", "02-rig", "03-genai", "04-rag", "05-rag", "06-rag",
+             "07-query", "08-rag", "09-rag-eval", "10-rag-milvus", "11-rag-advance",
+             "12-rag-summary", "13-agent-core", "14-agent-tool", "15-agent-sql",
+             "16-agent-function-calling", "17-agent-memory", "18-agent-error",
+             "19-agent-summary", "20-agent-preformence-analysis", "21-agent-cache",
+             "22-agent-async", "23-agent-batch", "24-agent-vllm"]
+asyncio_mode = "auto"
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+# ⚠️ RUF001/002/003 是「全角标点与 ASCII 标点歧义」告警。
+#    中文技术文档里 `（`、`）`、`，` 是**正常**用法，
+#    一条条改会造成几百处无意义 diff，所以直接关闭这三条规则。
+ignore = ["RUF001", "RUF002", "RUF003"]

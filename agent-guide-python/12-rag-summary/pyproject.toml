@@ -1,0 +1,32 @@
+[project]
+name = "rag-12-py"
+version = "0.1.0"
+description = "摘要式 RAG 服务（五档消融阶梯）"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "agent-logging-py>=0.1.0",
+    "rag-04-py>=0.1.0",
+    "rag-05-py>=0.1.0",
+    "rag-10-py>=0.1.0",
+    "genai-03-py>=0.1.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.25",
+    "ruff>=0.9",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.13,<0.13.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "rag_12"
+module-root = "src"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+filterwarnings = ["ignore::DeprecationWarning"]

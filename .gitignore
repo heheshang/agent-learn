@@ -84,6 +84,16 @@ chroma-data/
 __pycache__/
 *.py[cod]
 
+# ── agent-guide-python（Python 对照项目）的运行时产物 ────────────────
+#
+# ⚠️ `.venv/` 有几万个文件，**索引它会严重拖慢 Cursor 的文件搜索**，
+#    所以这里要显式忽略（不能只靠 venv 自带的 .gitignore）。
+agent-guide-python/.venv/
+agent-guide-python/.pytest_cache/
+agent-guide-python/.ruff_cache/
+agent-guide-python/dist/
+agent-guide-python/build/
+
 # ── 本地环境与密钥 ──────────────────────────────────────────────────────
 .env
 .env.*

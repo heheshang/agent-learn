@@ -1,0 +1,28 @@
+[project]
+name = "axum-01-py"
+version = "0.1.0"
+description = "HTTP 服务基础（FastAPI 路由 / 异步 I/O / Pydantic）"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.25",
+    "ruff>=0.9",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.13,<0.13.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "axum_01"
+module-root = "src"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+filterwarnings = ["ignore::DeprecationWarning"]

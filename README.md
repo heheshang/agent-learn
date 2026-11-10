@@ -29,6 +29,8 @@
 22-agent-async 手撕异步处理：并发工具执行（四档模式 + 限流 + 线程池轨道）
 23-agent-batch 手撕批处理优化（客户端侧）：Embedding / Reranker 批处理（三档策略 + 背压 + 批大小扫描）
 24-agent-vllm 手撕批处理优化（服务端侧）：vLLM continuous batching（GOODPUT / TTFT / 调度器）
+
+agent-guide-python  Python 对照实现（与 Rust 侧 00~24 一一对应，uv 管理环境）
 ```
 
 ## 思维导图：整个仓库
@@ -892,6 +894,7 @@ RUST_LOG=warn,rag_12::retriever=debug  # 只对某个模块开 debug
 | [22-agent-async](22-agent-async/) | 一轮里的多个工具调用一个接一个等 | **并发执行后结果乱序，回执必须按 call_id 还原输入顺序；同步阻塞的工具塞进 async 会卡死整个事件循环（要 spawn_blocking）；buffer_unordered(0) 会让请求永远挂住；并发 ≠ 并行，CPU 密集任务并发零收益** |
 | [23-agent-batch](23-agent-batch/) | 一条一条地调 embedding / rerank，太慢 | **批处理涨吞吐的同时会抬高单条延迟（实测 17~27 倍），只看总耗时必然误判；固定批里一条长文本拖慢同批所有短文本（padding 浪费 55.6%），要按长度排序分桶；分桶排序会打乱输入顺序，必须按原始下标还原；攒批要有背压三闸门；LangChain 的 batch() 是客户端并行不是合并请求，远程批量是否更快完全取决于上游是否真的并行（Ollama 实测 0.98x）** |
 | [24-agent-vllm](24-agent-vllm/) | 服务端把请求一条条跑，GPU 闲着 | **连续批处理的价值不是「快一点」而是「负载越高差距越大」——GOODPUT 相对静态批处理从 1.7x 放大到 57.8x（静态批处理高负载下 GOODPUT 直接崩到 0.16）；只看吞吐会选出一个延迟不可用的服务（max_num_seqs 64→256 吞吐还在涨，GOODPUT 却从 7.36 掉到 5.28，TPOT 涨 5.4 倍）；长度一致时两种模式完全等价（连续批处理的优势全部来自长度参差）；客户端并发=1 服务端永远攒不出批** |
+| [agent-guide-python](agent-guide-python/) | 只会 Rust，想看懂 Python 生态的等价实现 | **同一套设计换语言重写，最能暴露「语言特性」和「框架约定」各自贡献了什么；对照实现的目录划分与依赖图必须与 Rust 侧一一对应，否则差异无法归因** |
 
 ## 快速开始
 

@@ -1,0 +1,30 @@
+[project]
+name = "agent-22-py"
+version = "0.1.0"
+description = "异步处理（并发执行 / 限流 / 线程池轨道）"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "agent-logging-py>=0.1.0",
+    "agent-18-py>=0.1.0",
+    "agent-16-py>=0.1.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.25",
+    "ruff>=0.9",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.13,<0.13.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "agent_22"
+module-root = "src"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+filterwarnings = ["ignore::DeprecationWarning"]
