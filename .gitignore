@@ -94,6 +94,15 @@ agent-guide-python/.ruff_cache/
 agent-guide-python/dist/
 agent-guide-python/build/
 
+# ── 25-agent-summary 的产物 ──────────────────────────────────────────
+#
+# ⚠️ `reports/` 是**输出**，不入库。
+#    跑一次 `make report-25` 就重新生成。
+#
+# ⚠️ 压测产物尤其不该入库：它们**每次跑都不一样**
+#    （QPS / P99 会随机器负载浮动），提交进去只会制造 diff 噪音。
+25-agent-summary/reports/
+
 # ── 本地环境与密钥 ──────────────────────────────────────────────────────
 .env
 .env.*

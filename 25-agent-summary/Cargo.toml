@@ -1,0 +1,42 @@
+[package]
+name = "agent-25"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+agent-logging = { path = "../00-logging" }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+chrono = { workspace = true }
+
+# ── HTTP API 层 ──────────────────────────────────────────────────────
+axum = { workspace = true }
+tower-http = { workspace = true }
+
+# tower：集成测试里用 `ServiceExt::oneshot` 直接调 axum 路由（不开端口）。
+tower = { workspace = true }
+
+# HTTP 客户端 —— 打真 HTTP 的压测轨（`bench-http`）。
+reqwest = { workspace = true }
+
+# ── 并发原语 ─────────────────────────────────────────────────────────
+#
+# 用 `buffer_unordered(n)` 做限流并发压测。
+#
+# ⚠️ 为什么不用 `tokio::spawn`：
+#    `spawn` 要求 future 是 `'static`，
+#    而这里的请求要借用 `&Pipeline` / `&[Request]`。
+futures = { workspace = true }
+
+# ── 缓存键哈希 ──────────────────────────────────────────────────────
+# SHA-256：把请求内容压成固定长度的十六进制串，作为缓存键。
+#
+# ⚠️ 不能用 `DefaultHasher`：它的输出**不保证跨进程稳定**且 seed 随机
+#    —— 重启一次所有键全变，缓存永远命中不了。
+sha2 = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

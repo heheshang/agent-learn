@@ -11,14 +11,14 @@
 # ============================================================================
 
 CARGO := cargo
-PKGS  := axum-01 rig-02 genai-03 rag-04 rag-05 rag-06 rag-07 rag-08 rag-09 rag-10 rag-11 rag-12 agent-13 agent-14 agent-15 agent-16 agent-17 agent-18 agent-19 agent-20 agent-21 agent-22 agent-23 agent-24
+PKGS  := axum-01 rig-02 genai-03 rag-04 rag-05 rag-06 rag-07 rag-08 rag-09 rag-10 rag-11 rag-12 agent-13 agent-14 agent-15 agent-16 agent-17 agent-18 agent-19 agent-20 agent-21 agent-22 agent-23 agent-24 agent-25
 
 .DEFAULT_GOAL := help
 .PHONY: help build run test check fmt fmt-check lint clean logs \
-        01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 \
+        01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 \
         axum rig genai rag agent \
-        serve-06 serve-07 serve-08 serve-09 serve-10 serve-11 serve-12 serve-13 serve-14 serve-15 serve-16 serve-17 serve-18 serve-19 serve-21 serve-22 serve-23 serve-24 \
-        demo-04 demo-05 demo-06 demo-07 demo-08 demo-09 demo-10 demo-11 demo-12 demo-13 demo-14 demo-15 demo-16 demo-17 demo-18 demo-19 demo-21 demo-22 demo-23 demo-24 \
+        serve-06 serve-07 serve-08 serve-09 serve-10 serve-11 serve-12 serve-13 serve-14 serve-15 serve-16 serve-17 serve-18 serve-19 serve-21 serve-22 serve-23 serve-24 serve-25 \
+        demo-04 demo-05 demo-06 demo-07 demo-08 demo-09 demo-10 demo-11 demo-12 demo-13 demo-14 demo-15 demo-16 demo-17 demo-18 demo-19 demo-21 demo-22 demo-23 demo-24 demo-25 \
         compare-07 compare-08 compare-09 compare-10 compare-11 compare-12 compare-13 compare-14 compare-16 compare-17 compare-18 compare-19 compare-21 compare-22 \
         semantics-21 \
         call-14 guard-15 \
@@ -29,6 +29,7 @@ PKGS  := axum-01 rig-02 genai-03 rag-04 rag-05 rag-06 rag-07 rag-08 rag-09 rag-1
         bench-23 bench-rerank-23 sweep-23 bench-remote-23 \
         bench-24 bench-mode-24 bench-seqs-24 bench-chunked-24 modes-24 \
         mock-24 health-24 bench-vllm-24 vllm-up-24 vllm-down-24 \
+        bench-25 bench-a-25 bench-b-25 bench-c-25 loadtest-25 locust-25 jmeter-25 profile-25 \
         milvus-up milvus-down milvus-destroy \
         check-mermaid check-toc \
         prop prop-08 prop-13 prop-14 prop-15 prop-21 \
@@ -149,6 +150,9 @@ clean: ## 清理构建产物
 24: ## 24-agent-vllm：★ ★ ★ 批处理对照实验（连续批处理调度器）
 	$(MAKE) -C 24-agent-vllm bench
 
+25: ## 25-agent-summary：★ ★ ★ 三档策略对照 + 分段剖析（Agent 全链路汇总）
+	$(MAKE) -C 25-agent-summary bench
+
 axum: 01 ## 别名
 rig: 02 ## 别名
 genai: 03 ## 别名
@@ -210,6 +214,9 @@ serve-23: ## 启动 23-agent-batch 服务（:3150）
 
 serve-24: ## 启动 24-agent-vllm 服务（:3160）
 	$(MAKE) -C 24-agent-vllm serve
+
+serve-25: ## 启动 25-agent-summary 服务（:3170）
+	$(MAKE) -C 25-agent-summary serve
 
 mcp-14: ## 启动 14-agent-tool 内置 MCP 服务器（:3071）
 	$(MAKE) -C 14-agent-tool mcp
@@ -281,6 +288,9 @@ demo-23: ## 23-agent-batch：★ ★ ★ 批处理对照实验（嵌入 + 重排
 
 demo-24: ## 24-agent-vllm：★ ★ ★ 批处理对照实验（连续批处理调度器）
 	$(MAKE) -C 24-agent-vllm bench
+
+demo-25: ## 25-agent-summary：★ ★ ★ 三档策略对照 + 分段剖析
+	$(MAKE) -C 25-agent-summary bench
 
 call-14: ## 14-agent-tool：直接调天气工具（不经模型）★
 	$(MAKE) -C 14-agent-tool call
@@ -385,6 +395,29 @@ bench-chunked-24: ## 24-agent-vllm：★ 实验 C chunked prefill 对照
 
 modes-24: ## 24-agent-vllm：★ 两种批处理模式的说明
 	$(MAKE) -C 24-agent-vllm modes
+
+# ── 25-agent-summary 专属 ─────────────────────────────────────────────
+#
+# ⚠️ 25 **不依赖**其它项目 —— 能力全部自己实现。
+#    三档策略的对照实验是本项目的核心产出。
+
+bench-25: ## 25-agent-summary：★ 三档策略对照（进程内轨 —— 用来归因）
+	$(MAKE) -C 25-agent-summary bench
+
+bench-http-25: ## 25-agent-summary：★ HTTP 轨（外部视角验证，需先 make serve-25）
+	$(MAKE) -C 25-agent-summary bench-http
+
+profile-25: ## 25-agent-summary：★ 分段剖析 —— 指出时间花在哪
+	$(MAKE) -C 25-agent-summary profile
+
+sweep-25: ## 25-agent-summary：★ 并发度扫描
+	$(MAKE) -C 25-agent-summary sweep
+
+cache-sweep-25: ## 25-agent-summary：★ 缓存命中率扫描（缓存收益的唯一自变量是命中率）
+	$(MAKE) -C 25-agent-summary cache-sweep
+
+report-25: ## 25-agent-summary：生成周报 Markdown
+	$(MAKE) -C 25-agent-summary report
 
 mock-24: ## 24-agent-vllm：启动 mock vLLM（:8000，OpenAI 兼容）
 	$(MAKE) -C 24-agent-vllm mock
