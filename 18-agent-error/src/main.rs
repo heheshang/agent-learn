@@ -239,7 +239,10 @@ async fn run_demo(question: &str) -> Result<()> {
 
     println!("\n=== 跑一次 Agent（带错误处理）===");
     println!("问题: {question}");
-    println!("tool_choice: {}\n", config.tool_choice.name());
+    println!(
+        "tool_choice: {}\n",
+        agent_16::llm::tool_choice_name(&config.tool_choice)
+    );
 
     let run = agent.run(question).await?;
 

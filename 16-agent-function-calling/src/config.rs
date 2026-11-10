@@ -9,7 +9,7 @@
 //! 环境变量名带 `FC_` 前缀（Function Calling），
 //! 避免和其它项目撞名（06 用 `RAG_`，13 用 `AGENT_`，14 用 `TOOL_`，15 用 `SQL_`）。
 
-use crate::llm::ToolChoiceMode;
+use crate::llm::ToolChoice;
 
 /// Agent 循环配置。
 #[derive(Debug, Clone)]
@@ -54,14 +54,14 @@ pub struct PromptConfig {
     ///
     /// `auto` 和 `none` 的对照能回答一个关键问题：
     /// 「**模型自己决定要不要用工具**」到底值多少。
-    pub tool_choice: ToolChoiceMode,
+    pub tool_choice: ToolChoice,
 }
 
 impl Default for PromptConfig {
     fn default() -> Self {
         Self {
             strict: true,
-            tool_choice: ToolChoiceMode::Auto,
+            tool_choice: ToolChoice::Auto,
         }
     }
 }
@@ -211,7 +211,7 @@ impl AppConfig {
             config.prompt.strict = v;
         }
         if let Some(v) = env_str("FC_TOOL_CHOICE")
-            && let Some(m) = ToolChoiceMode::parse(&v)
+            && let Some(m) = crate::llm::parse_tool_choice(&v)
         {
             config.prompt.tool_choice = m;
         }
@@ -260,7 +260,7 @@ impl AppConfig {
             if self.disable_reasoning { "关" } else { "开" },
             self.agent.max_steps,
             if self.prompt.strict { "是" } else { "否" },
-            self.prompt.tool_choice.name(),
+            crate::llm::tool_choice_name(&self.prompt.tool_choice),
             self.tool.weather_default_days,
             self.tool.weather_max_days,
             allowed,
@@ -340,8 +340,8 @@ mod tests {
     #[test]
     fn parses_tool_choice_from_env_value() {
         assert_eq!(
-            ToolChoiceMode::parse("forced:get_weather"),
-            Some(ToolChoiceMode::Forced("get_weather".to_string()))
+            crate::llm::parse_tool_choice("forced:get_weather"),
+            Some(ToolChoice::tool("get_weather"))
         );
     }
 }

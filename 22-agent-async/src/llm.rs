@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 pub use agent_18::llm::{
     FunctionLlm, FunctionLlmFuture, GenaiFunctionLlm, LlmStep, ScriptedLlm, ScriptedStep,
-    ScriptedToolCall, ToolChoiceMode,
+    ScriptedToolCall, ToolChoice,
 };
 
 /// 便捷别名。
@@ -39,7 +39,7 @@ pub async fn generate_text(
             system,
             &[genai::chat::ChatMessage::user(user.to_string())],
             &[],
-            ToolChoiceMode::None,
+            ToolChoice::None,
         )
         .await?;
 
@@ -98,7 +98,7 @@ mod tests {
                 "s",
                 &[genai::chat::ChatMessage::user("问题".to_string())],
                 &[],
-                ToolChoiceMode::Auto,
+                ToolChoice::Auto,
             )
             .await
             .unwrap();

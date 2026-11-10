@@ -60,15 +60,17 @@ pub mod prompt;
 pub mod tool;
 pub mod tools;
 
-pub use agent::{Agent, AgentRun, StepRecord, TokenUsage, ToolCallRecord};
+pub use agent::{
+    Agent, AgentRun, StepRecord, TokenUsage, ToolCallRecord, build_assistant_message, normalize_usage,
+};
 pub use config::{AgentConfig, AppConfig, PromptConfig, ToolConfig};
 pub use error::{AppError, AppResult, ToolError};
 pub use functions::{
     CALCULATE_TOOL_NAME, GET_WEATHER_TOOL_NAME, SEARCH_KNOWLEDGE_TOOL_NAME, default_registry,
 };
 pub use llm::{
-    FunctionLlm, GenaiFunctionLlm, ScriptedFunctionLlm, ScriptedStep, ScriptedToolCall,
-    ToolChoiceMode,
+    FunctionLlm, GenaiFunctionLlm, ScriptedFunctionLlm, ScriptedStep, ScriptedToolCall, ToolChoice,
+    parse_tool_choice, tool_choice_name,
 };
 pub use tool::{FunctionTool, ToolContext, ToolFuture, ToolOutcome, ToolRegistry};
 pub use tools::{ToolSpec, check_strict_compliance, strict_schema};

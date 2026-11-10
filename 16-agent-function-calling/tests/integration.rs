@@ -27,7 +27,7 @@ use agent_16::agent::Agent;
 use agent_16::api::AppStateInner;
 use agent_16::api::routes::router;
 use agent_16::config::AppConfig;
-use agent_16::llm::{ScriptedFunctionLlm, ScriptedStep, ScriptedToolCall, ToolChoiceMode};
+use agent_16::llm::{ScriptedFunctionLlm, ScriptedStep, ScriptedToolCall, ToolChoice};
 use agent_16::tool::{FunctionTool, ToolContext, ToolFuture, ToolOutcome, ToolRegistry};
 use agent_16::tools::ToolSpec;
 
@@ -491,8 +491,14 @@ fn request_post_raw(path: &str, body: &str) -> Request<Body> {
 #[test]
 fn tool_choice_modes_cover_the_api_contract() {
     // 四档必须和 API 文档一致。
-    assert_eq!(ToolChoiceMode::Auto.name(), "auto");
-    assert_eq!(ToolChoiceMode::None.name(), "none");
-    assert_eq!(ToolChoiceMode::Required.name(), "required");
-    assert_eq!(ToolChoiceMode::Forced("x".into()).name(), "forced");
+    assert_eq!(agent_16::llm::tool_choice_name(&ToolChoice::Auto), "auto");
+    assert_eq!(agent_16::llm::tool_choice_name(&ToolChoice::None), "none");
+    assert_eq!(
+        agent_16::llm::tool_choice_name(&ToolChoice::Required),
+        "required"
+    );
+    assert_eq!(
+        agent_16::llm::tool_choice_name(&ToolChoice::tool("x")),
+        "forced"
+    );
 }

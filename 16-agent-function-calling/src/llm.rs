@@ -45,7 +45,6 @@ use std::sync::Mutex;
 
 use genai::chat::{
     ChatMessage, ChatOptions, ChatRequest, ChatResponse, MessageContent, ReasoningEffort, ToolCall,
-    ToolChoice,
 };
 use serde_json::Value;
 
@@ -112,54 +111,50 @@ use crate::tools::ToolSpec;
 ///
 /// 这四档正好能做一组**消融对照** ——
 /// 「模型自己决定要不要用工具」到底贡献了多少。
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub enum ToolChoiceMode {
-    /// 模型自己决定（默认）。
-    #[default]
-    Auto,
+///
+/// ## ⚠️ 为什么**不再**自己定义一份枚举
+///
+/// 本项目原先手写了一个 `ToolChoiceMode`（Auto / None / Required / Forced），
+/// 它与 `genai::chat::ToolChoice` **一一对应**，只是多了一套
+/// `parse` / `name` 的字符串转换。
+///
+/// ★ **重复定义的代价不是「多几行代码」，而是「两份语义会漂移」** ——
+/// 比如哪天 provider 加了新档位，本地枚举不会跟着更新，
+/// 于是「本地说支持、provider 不支持」，
+/// 症状是 provider 报一个看不懂的 400。
+///
+/// 所以现在直接用 crate 的 [`genai::chat::ToolChoice`]，
+/// 只保留两个**纯字符串**的辅助函数（[`parse_tool_choice`] /
+/// [`tool_choice_name`]）—— 它们是 CLI/配置层的需要，不是语义定义。
+pub use genai::chat::ToolChoice;
 
-    /// 一个都不调。
-    None,
-
-    /// 至少调一个。
-    Required,
-
-    /// 必须调指定的那个工具。
-    Forced(String),
+/// 从字符串解析工具选择策略。
+///
+/// `forced:工具名` 表示指定函数（对应 crate 的 `ToolChoice::Tool`）。
+///
+/// ⚠️ 这是**纯字符串转换**，不含任何语义判断 ——
+/// 语义由 crate 的 [`genai::chat::ToolChoice`] 定义。
+pub fn parse_tool_choice(value: &str) -> Option<ToolChoice> {
+    let raw = value.trim();
+    match raw.to_ascii_lowercase().as_str() {
+        "auto" => Some(ToolChoice::Auto),
+        "none" => Some(ToolChoice::None),
+        "required" => Some(ToolChoice::Required),
+        _ => raw
+            .strip_prefix("forced:")
+            .map(|name| ToolChoice::tool(name.trim().to_string())),
+    }
 }
 
-impl ToolChoiceMode {
-    /// 模式名。
-    pub fn name(&self) -> &'static str {
-        match self {
-            ToolChoiceMode::Auto => "auto",
-            ToolChoiceMode::None => "none",
-            ToolChoiceMode::Required => "required",
-            ToolChoiceMode::Forced(_) => "forced",
-        }
-    }
-
-    /// 翻译成 `genai` 的 `ToolChoice`。
-    pub fn to_genai(&self) -> ToolChoice {
-        match self {
-            ToolChoiceMode::Auto => ToolChoice::Auto,
-            ToolChoiceMode::None => ToolChoice::None,
-            ToolChoiceMode::Required => ToolChoice::Required,
-            ToolChoiceMode::Forced(name) => ToolChoice::tool(name.clone()),
-        }
-    }
-
-    /// 从字符串解析（`forced:工具名` 表示指定函数）。
-    pub fn parse(value: &str) -> Option<Self> {
-        let raw = value.trim();
-        match raw.to_ascii_lowercase().as_str() {
-            "auto" => Some(ToolChoiceMode::Auto),
-            "none" => Some(ToolChoiceMode::None),
-            "required" => Some(ToolChoiceMode::Required),
-            _ => raw
-                .strip_prefix("forced:")
-                .map(|name| ToolChoiceMode::Forced(name.trim().to_string())),
-        }
+/// 工具选择策略的**显示名**（用于日志与 CLI 输出）。
+///
+/// ⚠️ 只用于**展示**，不参与任何语义判断。
+pub fn tool_choice_name(choice: &ToolChoice) -> &'static str {
+    match choice {
+        ToolChoice::Auto => "auto",
+        ToolChoice::None => "none",
+        ToolChoice::Required => "required",
+        ToolChoice::Tool { .. } => "forced",
     }
 }
 
@@ -187,7 +182,7 @@ pub trait FunctionLlm: Send + Sync {
         system: &'a str,
         messages: &'a [ChatMessage],
         tools: &'a [ToolSpec],
-        tool_choice: ToolChoiceMode,
+        tool_choice: ToolChoice,
     ) -> FunctionLlmFuture<'a>;
 
     /// 模型名。
@@ -231,7 +226,7 @@ impl FunctionLlm for GenaiFunctionLlm {
         system: &'a str,
         messages: &'a [ChatMessage],
         tools: &'a [ToolSpec],
-        tool_choice: ToolChoiceMode,
+        tool_choice: ToolChoice,
     ) -> FunctionLlmFuture<'a> {
         Box::pin(async move {
             let mut options = ChatOptions::default()
@@ -264,7 +259,7 @@ impl FunctionLlm for GenaiFunctionLlm {
 
             if !tools.is_empty() {
                 request = request.with_tools(tools.iter().map(|t| t.to_genai_tool()));
-                options = options.with_tool_choice(tool_choice.to_genai());
+                options = options.with_tool_choice(tool_choice.clone());
             }
 
             debug!(
@@ -272,7 +267,7 @@ impl FunctionLlm for GenaiFunctionLlm {
                 system_len = system.chars().count(),
                 messages = messages.len(),
                 tools = tools.len(),
-                tool_choice = tool_choice.name(),
+                tool_choice = tool_choice_name(&tool_choice),
                 disable_reasoning = self.disable_reasoning,
                 "发起带工具的 LLM 调用"
             );
@@ -474,7 +469,7 @@ impl FunctionLlm for ScriptedFunctionLlm {
         system: &'a str,
         messages: &'a [ChatMessage],
         tools: &'a [ToolSpec],
-        tool_choice: ToolChoiceMode,
+        tool_choice: ToolChoice,
     ) -> FunctionLlmFuture<'a> {
         let step = {
             let mut calls = self.calls.lock().expect("calls 锁中毒");
@@ -482,7 +477,7 @@ impl FunctionLlm for ScriptedFunctionLlm {
                 system: system.to_string(),
                 message_count: messages.len(),
                 tools: tools.iter().map(|t| t.name.clone()).collect(),
-                tool_choice: tool_choice.name().to_string(),
+                tool_choice: tool_choice_name(&tool_choice).to_string(),
             });
 
             let mut steps = self.steps.lock().expect("steps 锁中毒");
@@ -510,30 +505,37 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// ⚠️ `parse` 现在只是**纯字符串转换**，不含语义判断 ——
+    /// 语义由 crate 的 `ToolChoice` 定义。
     #[test]
     fn parses_tool_choice_modes() {
-        assert_eq!(ToolChoiceMode::parse("auto"), Some(ToolChoiceMode::Auto));
-        assert_eq!(ToolChoiceMode::parse("NONE"), Some(ToolChoiceMode::None));
+        assert_eq!(parse_tool_choice("auto"), Some(ToolChoice::Auto));
+        assert_eq!(parse_tool_choice("NONE"), Some(ToolChoice::None));
+        assert_eq!(parse_tool_choice("required"), Some(ToolChoice::Required));
         assert_eq!(
-            ToolChoiceMode::parse("required"),
-            Some(ToolChoiceMode::Required)
+            parse_tool_choice("forced:get_weather"),
+            Some(ToolChoice::tool("get_weather"))
         );
-        assert_eq!(
-            ToolChoiceMode::parse("forced:get_weather"),
-            Some(ToolChoiceMode::Forced("get_weather".to_string()))
-        );
-        assert_eq!(ToolChoiceMode::parse("nope"), None);
+        assert_eq!(parse_tool_choice("nope"), None);
     }
 
+    /// ★ 直接用 crate 的 `ToolChoice` —— 映射是**恒等**的，
+    /// 不再需要「本地枚举 → crate 枚举」的翻译层。
     #[test]
-    fn translates_tool_choice_to_genai() {
-        assert_eq!(ToolChoiceMode::Auto.to_genai(), ToolChoice::Auto);
-        assert_eq!(ToolChoiceMode::None.to_genai(), ToolChoice::None);
-        assert_eq!(ToolChoiceMode::Required.to_genai(), ToolChoice::Required);
-        assert_eq!(
-            ToolChoiceMode::Forced("f".to_string()).to_genai(),
-            ToolChoice::tool("f")
-        );
+    fn tool_choice_maps_are_identity() {
+        assert_eq!(ToolChoice::Auto, ToolChoice::Auto);
+        assert_eq!(ToolChoice::None, ToolChoice::None);
+        assert_eq!(ToolChoice::Required, ToolChoice::Required);
+        assert_eq!(ToolChoice::tool("f"), ToolChoice::tool("f"));
+    }
+
+    /// ★ 显示名只是**展示**，不参与语义。
+    #[test]
+    fn tool_choice_names_are_for_display_only() {
+        assert_eq!(tool_choice_name(&ToolChoice::Auto), "auto");
+        assert_eq!(tool_choice_name(&ToolChoice::None), "none");
+        assert_eq!(tool_choice_name(&ToolChoice::Required), "required");
+        assert_eq!(tool_choice_name(&ToolChoice::tool("x")), "forced");
     }
 
     #[tokio::test]
@@ -544,19 +546,19 @@ mod tests {
         ]);
 
         let resp = llm
-            .chat_with_tools("s", &[], &[], ToolChoiceMode::Auto)
+            .chat_with_tools("s", &[], &[], ToolChoice::Auto)
             .await
             .unwrap();
         assert_eq!(resp.first_text(), Some("一"));
 
         let resp = llm
-            .chat_with_tools("s", &[], &[], ToolChoiceMode::Auto)
+            .chat_with_tools("s", &[], &[], ToolChoice::Auto)
             .await
             .unwrap();
         assert_eq!(resp.first_text(), Some("二"));
 
         assert!(
-            llm.chat_with_tools("s", &[], &[], ToolChoiceMode::Auto)
+            llm.chat_with_tools("s", &[], &[], ToolChoice::Auto)
                 .await
                 .is_err()
         );
@@ -567,7 +569,7 @@ mod tests {
         let llm = ScriptedFunctionLlm::always(ScriptedStep::Text("答案".to_string()));
         let specs = vec![ToolSpec::new("f", "d", json!({}))];
 
-        llm.chat_with_tools("系统提示", &[], &specs, ToolChoiceMode::Required)
+        llm.chat_with_tools("系统提示", &[], &specs, ToolChoice::Required)
             .await
             .unwrap();
 
@@ -587,7 +589,7 @@ mod tests {
         )]);
 
         let resp = llm
-            .chat_with_tools("s", &[], &[], ToolChoiceMode::Auto)
+            .chat_with_tools("s", &[], &[], ToolChoice::Auto)
             .await
             .unwrap();
 

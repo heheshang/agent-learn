@@ -82,6 +82,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
+use agent_16::agent::build_assistant_message;
 use agent_logging::{debug, info, warn};
 use genai::chat::{ChatMessage, ChatResponse, ToolCall, ToolResponse};
 use serde::{Deserialize, Serialize};
@@ -191,29 +192,11 @@ pub struct AgentRun {
 }
 
 /// 累计 token 用量。
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
-pub struct TokenUsage {
-    /// 输入 token。
-    pub prompt_tokens: u64,
-    /// 输出 token。
-    pub completion_tokens: u64,
-    /// 总 token。
-    pub total_tokens: u64,
-}
-
-impl TokenUsage {
-    /// 累加一步的用量。
-    fn add(&mut self, response: &ChatResponse) {
-        let prompt = response.usage.prompt_tokens.unwrap_or(0) as u64;
-        let completion = response.usage.completion_tokens.unwrap_or(0) as u64;
-        self.prompt_tokens += prompt;
-        self.completion_tokens += completion;
-        self.total_tokens += response
-            .usage
-            .total_tokens
-            .unwrap_or((prompt + completion) as i32) as u64;
-    }
-}
+///
+/// ⚠️ **直接复用 16 的 [`TokenUsage`]** —— 本项目原先自己抄了一份，
+/// 逐字段相同。三份同名同义的结构体一旦漂移，
+/// 「16 修了但 21 没修」就会静默发生（**复用 ≠ 自动生效**）。
+pub use agent_16::agent::TokenUsage;
 
 /// 带缓存的 Agent。
 pub struct CachedAgent {
@@ -434,7 +417,7 @@ impl CachedAgent {
                 &self.config.model,
                 &messages,
                 &digest,
-                self.config.prompt.tool_choice.name(),
+                agent_16::llm::tool_choice_name(&self.config.prompt.tool_choice),
                 self.config.temperature,
                 self.config.max_tokens,
                 self.config.disable_reasoning,
@@ -717,8 +700,9 @@ impl CachedAgent {
 
 /// 把 `ChatResponse` 转成缓存快照。
 pub fn chat_response_to_cached(response: &ChatResponse, key: &CacheKey) -> CachedResponse {
-    let prompt = response.usage.prompt_tokens.unwrap_or(0) as u64;
-    let completion = response.usage.completion_tokens.unwrap_or(0) as u64;
+    // ⚠️ 统一走 16 的 `normalize_usage` —— 它处理了「provider 报负数」的
+    //    回绕问题（`-1 as u64` = 18446744073709551615）。
+    let usage = agent_16::agent::normalize_usage(&response.usage);
 
     CachedResponse {
         text: response.first_text().unwrap_or_default().to_string(),
@@ -735,12 +719,9 @@ pub fn chat_response_to_cached(response: &ChatResponse, key: &CacheKey) -> Cache
             .collect(),
         reasoning: response.reasoning_content.clone(),
         usage: CachedUsage {
-            prompt_tokens: prompt,
-            completion_tokens: completion,
-            total_tokens: response
-                .usage
-                .total_tokens
-                .unwrap_or((prompt + completion) as i32) as u64,
+            prompt_tokens: usage.prompt_tokens,
+            completion_tokens: usage.completion_tokens,
+            total_tokens: usage.total_tokens,
         },
         model: key.model.clone(),
         stored_at_ms: crate::cache::now_ms(),
@@ -806,34 +787,6 @@ pub fn cached_response_to_chat_response(cached: &CachedResponse) -> ChatResponse
     }
 }
 
-/// 构造 assistant 消息（带工具调用 + 思考内容）。
-///
-/// 复用 16 的语义：**思考内容在前，工具调用在后**。
-fn build_assistant_message(
-    text: String,
-    reasoning: Option<String>,
-    calls: &[ToolCall],
-) -> ChatMessage {
-    use genai::chat::ContentPart;
-
-    let mut parts: Vec<ContentPart> = Vec::new();
-
-    if let Some(reasoning) = reasoning
-        && !reasoning.is_empty()
-    {
-        parts.push(ContentPart::ReasoningContent(reasoning));
-    }
-
-    if !text.is_empty() {
-        parts.push(ContentPart::Text(text));
-    }
-
-    for call in calls {
-        parts.push(ContentPart::ToolCall(call.clone()));
-    }
-
-    ChatMessage::assistant(genai::chat::MessageContent::from_parts(parts))
-}
 
 #[cfg(test)]
 mod tests {
@@ -917,7 +870,7 @@ mod tests {
             _system: &'a str,
             _messages: &'a [ChatMessage],
             _tools: &'a [agent_16::tools::ToolSpec],
-            _tool_choice: agent_16::llm::ToolChoiceMode,
+            _tool_choice: agent_16::llm::ToolChoice,
         ) -> agent_16::llm::FunctionLlmFuture<'a> {
             let step = {
                 let mut calls = self.calls.lock().unwrap_or_else(|e| e.into_inner());
@@ -981,7 +934,7 @@ mod tests {
             _system: &'a str,
             messages: &'a [ChatMessage],
             _tools: &'a [agent_16::tools::ToolSpec],
-            _tool_choice: agent_16::llm::ToolChoiceMode,
+            _tool_choice: agent_16::llm::ToolChoice,
         ) -> agent_16::llm::FunctionLlmFuture<'a> {
             let n = {
                 let mut counter = self.counter.lock().unwrap_or_else(|e| e.into_inner());
@@ -1263,7 +1216,7 @@ mod tests {
             _system: &'a str,
             messages: &'a [ChatMessage],
             _tools: &'a [agent_16::tools::ToolSpec],
-            _tool_choice: agent_16::llm::ToolChoiceMode,
+            _tool_choice: agent_16::llm::ToolChoice,
         ) -> agent_16::llm::FunctionLlmFuture<'a> {
             self.histories
                 .lock()

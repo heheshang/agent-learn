@@ -55,7 +55,8 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use agent_16::llm::{FunctionLlm, ToolChoiceMode};
+use agent_16::agent::build_assistant_message;
+use agent_16::llm::{FunctionLlm, ToolChoice};
 use agent_16::tools::ToolSpec;
 use agent_18::middleware::{ErrorHandlingMiddleware, MiddlewareOutcome, ToolCallRequest};
 use agent_logging::{debug, info, warn};
@@ -183,7 +184,7 @@ pub struct AgentConfig {
     pub max_steps: usize,
 
     /// 工具选择策略。
-    pub tool_choice: ToolChoiceMode,
+    pub tool_choice: ToolChoice,
 
     /// ⚠️ 并发上限。
     pub max_concurrency: usize,
@@ -193,7 +194,7 @@ impl Default for AgentConfig {
     fn default() -> Self {
         Self {
             max_steps: 5,
-            tool_choice: ToolChoiceMode::Auto,
+            tool_choice: ToolChoice::Auto,
             max_concurrency: 4,
         }
     }
@@ -280,6 +281,13 @@ impl Agent {
                 .await?;
 
             let text = response.first_text().unwrap_or_default().to_string();
+            // ⚠️★ 思考内容**必须回传**（16 的坑 2）——
+            //    推理模型在思考模式下要求把 `reasoning_content` 原样带回，
+            //    否则下一轮请求直接 400：
+            //    `The reasoning_content in the thinking mode must be passed back to the API.`
+            //
+            //    本项目原先**没有**回传，思考模式一开就 400（潜伏的真 bug）。
+            let reasoning = response.reasoning_content.clone();
             let calls: Vec<ToolCall> = response.into_tool_calls();
 
             // ── 没有工具调用 → 最终答案 ─────────────────────────
@@ -316,7 +324,14 @@ impl Agent {
             }
 
             // ── 有工具调用 → **并发**执行 ───────────────────────
-            messages.push(build_assistant_message(text.clone(), &calls));
+            // ⚠️ 复用 16 的 `build_assistant_message`（带 reasoning_content）——
+            //    本项目原先自己写了一份**不带**思考内容的版本，
+            //    思考模式一开就会被 provider 拒（400）。
+            messages.push(build_assistant_message(
+                text.clone(),
+                reasoning.clone(),
+                &calls,
+            ));
 
             let records = self.execute_calls_concurrently(&calls).await;
 
@@ -551,20 +566,6 @@ impl Agent {
             None => TaskResult::ok(outcome.observation, outcome.attempts),
         }
     }
-}
-
-/// 构造 assistant 消息（带工具调用）。
-fn build_assistant_message(text: String, calls: &[ToolCall]) -> ChatMessage {
-    let mut parts: Vec<genai::chat::ContentPart> = Vec::new();
-
-    if !text.is_empty() {
-        parts.push(genai::chat::ContentPart::Text(text));
-    }
-    for call in calls {
-        parts.push(genai::chat::ContentPart::ToolCall(call.clone()));
-    }
-
-    ChatMessage::assistant(MessageContent::from_parts(parts))
 }
 
 /// 跑一批「并发对照实验」—— 串行 / 全并发 / 乱序 / 限流 四档。

@@ -17,7 +17,7 @@ use crate::api::models::{
     RunResponse, ToolInfo, ToolListResponse,
 };
 use crate::error::AppError;
-use crate::llm::ToolChoiceMode;
+use crate::llm::ToolChoice;
 
 /// GET /health —— 健康检查。
 pub async fn health() -> impl IntoResponse {
@@ -32,7 +32,7 @@ pub async fn root(State(state): State<AppState>) -> impl IntoResponse {
         "agent": {
             "max_steps": state.config.agent.max_steps,
             "strict_prompt": state.config.prompt.strict,
-            "tool_choice": state.config.prompt.tool_choice.name(),
+            "tool_choice": crate::llm::tool_choice_name(&state.config.prompt.tool_choice),
         },
         "model": {
             "name": state.config.model,
@@ -189,15 +189,15 @@ pub async fn compare(
 ///
 /// ⚠️ `forced` 那一档需要知道工具名 ——
 /// 这里取**注册表里的第一个工具**。
-fn comparison_modes(state: &AppState) -> Vec<ToolChoiceMode> {
+fn comparison_modes(state: &AppState) -> Vec<ToolChoice> {
     let mut modes = vec![
-        ToolChoiceMode::Auto,
-        ToolChoiceMode::None,
-        ToolChoiceMode::Required,
+        ToolChoice::Auto,
+        ToolChoice::None,
+        ToolChoice::Required,
     ];
 
     if let Some(first) = state.agent.registry().names().first() {
-        modes.push(ToolChoiceMode::Forced(first.clone()));
+        modes.push(ToolChoice::tool(first.clone()));
     }
 
     modes
@@ -209,15 +209,15 @@ fn comparison_modes(state: &AppState) -> Vec<ToolChoiceMode> {
 ///
 /// 对照实验的价值在于**横向比较** ——
 /// 某一档挂了（模型不配合、上游超时），其余几档的数据仍然有价值。
-async fn run_one_mode(state: &AppState, mode: ToolChoiceMode, question: &str) -> CompareEntry {
+async fn run_one_mode(state: &AppState, mode: ToolChoice, question: &str) -> CompareEntry {
     let agent = build_agent_for_mode(state, mode.clone());
 
     match agent.run(question).await {
         Ok(run) => entry_from_run(mode, run),
         Err(e) => {
-            warn!(mode = mode.name(), error = %e, "对照档位运行失败");
+            warn!(mode = crate::llm::tool_choice_name(&mode), error = %e, "对照档位运行失败");
             CompareEntry {
-                mode: mode.name().to_string(),
+                mode: crate::llm::tool_choice_name(&mode).to_string(),
                 answer: String::new(),
                 tool_calls: 0,
                 tools_used: Vec::new(),
@@ -236,7 +236,7 @@ async fn run_one_mode(state: &AppState, mode: ToolChoiceMode, question: &str) ->
 /// `AppConfig` 是不可变地挂在 `AppState` 上的。
 /// 重建一个共享同一份工具注册表、只换 `tool_choice` 的 Agent，
 /// 比给配置加 `Arc<Mutex<>>` 干净得多。
-fn build_agent_for_mode(state: &AppState, mode: ToolChoiceMode) -> Arc<Agent> {
+fn build_agent_for_mode(state: &AppState, mode: ToolChoice) -> Arc<Agent> {
     let mut config = state.config.clone();
     config.prompt.tool_choice = mode;
 
@@ -249,9 +249,9 @@ fn build_agent_for_mode(state: &AppState, mode: ToolChoiceMode) -> Arc<Agent> {
 }
 
 /// 从运行结果组装对照项。
-fn entry_from_run(mode: ToolChoiceMode, run: AgentRun) -> CompareEntry {
+fn entry_from_run(mode: ToolChoice, run: AgentRun) -> CompareEntry {
     CompareEntry {
-        mode: mode.name().to_string(),
+        mode: crate::llm::tool_choice_name(&mode).to_string(),
         answer: run.answer,
         tool_calls: run.tool_calls,
         tools_used: run.tools_used,

@@ -248,7 +248,7 @@ fn build_agent_with_retries(
 
     let config = AgentConfig {
         max_steps: 3,
-        tool_choice: agent_22::llm::ToolChoiceMode::Auto,
+        tool_choice: agent_22::llm::ToolChoice::Auto,
         max_concurrency,
     };
 

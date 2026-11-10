@@ -6,7 +6,7 @@
 
 use std::path::PathBuf;
 
-use agent_16::llm::ToolChoiceMode;
+use agent_16::llm::ToolChoice;
 
 /// Web 搜索后端。
 ///
@@ -79,7 +79,7 @@ pub struct AppConfig {
     pub max_steps: usize,
 
     /// 工具选择策略。
-    pub tool_choice: ToolChoiceMode,
+    pub tool_choice: ToolChoice,
 
     /// 工具的**额外**重试次数（总次数 = 1 + max_retries）。
     pub max_retries: usize,
@@ -123,7 +123,7 @@ impl Default for AppConfig {
             max_tokens: 4096,
             disable_reasoning: true,
             max_steps: 6,
-            tool_choice: ToolChoiceMode::Auto,
+            tool_choice: ToolChoice::Auto,
             max_retries: 2,
             base_delay_ms: 50,
             max_delay_ms: 2000,
@@ -183,7 +183,7 @@ impl AppConfig {
             config.max_steps = v.clamp(1, 30);
         }
         if let Some(v) = env_str("SUM_TOOL_CHOICE")
-            && let Some(m) = ToolChoiceMode::parse(&v)
+            && let Some(m) = agent_16::llm::parse_tool_choice(&v)
         {
             config.tool_choice = m;
         }
@@ -241,7 +241,7 @@ impl AppConfig {
             self.max_tokens,
             if self.disable_reasoning { "关" } else { "开" },
             self.max_steps,
-            self.tool_choice.name(),
+            agent_16::llm::tool_choice_name(&self.tool_choice),
             self.max_retries,
             self.base_delay_ms,
             self.max_delay_ms,

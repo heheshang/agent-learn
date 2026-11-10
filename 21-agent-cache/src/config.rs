@@ -168,14 +168,14 @@ pub struct PromptConfig {
     pub strict: bool,
 
     /// 工具选择策略。
-    pub tool_choice: agent_16::llm::ToolChoiceMode,
+    pub tool_choice: agent_16::llm::ToolChoice,
 }
 
 impl Default for PromptConfig {
     fn default() -> Self {
         Self {
             strict: true,
-            tool_choice: agent_16::llm::ToolChoiceMode::Auto,
+            tool_choice: agent_16::llm::ToolChoice::Auto,
         }
     }
 }
@@ -277,7 +277,7 @@ impl AppConfig {
             config.prompt.strict = v;
         }
         if let Some(v) = env_str("CACHE_TOOL_CHOICE")
-            && let Some(m) = agent_16::llm::ToolChoiceMode::parse(&v)
+            && let Some(m) = agent_16::llm::parse_tool_choice(&v)
         {
             config.prompt.tool_choice = m;
         }

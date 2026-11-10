@@ -179,16 +179,53 @@ pub struct TokenUsage {
 
 impl TokenUsage {
     /// 累加一步的用量。
-    fn add(&mut self, response: &ChatResponse) {
-        let prompt = response.usage.prompt_tokens.unwrap_or(0) as u64;
-        let completion = response.usage.completion_tokens.unwrap_or(0) as u64;
-        self.prompt_tokens += prompt;
-        self.completion_tokens += completion;
-        // total 优先用上游给的，没有就用 prompt + completion 算。
-        self.total_tokens += response
-            .usage
-            .total_tokens
-            .unwrap_or((prompt + completion) as i32) as u64;
+    ///
+    /// ## ⚠️ 为什么自己算 `total`
+    ///
+    /// 上游不一定给 `total_tokens`（部分 provider 只给输入/输出），
+    /// 缺省时用 `prompt + completion` 兜底。
+    ///
+    /// ## ⚠️ 为什么用 `saturating` 归一化
+    ///
+    /// `genai` 的 [`genai::chat::Usage`] 用 `Option<i32>` 表示计数，
+    /// 理论上可能收到**负数**（某些 provider 在异常时会回 `-1`）。
+    ///
+    /// ⚠️ 直接 `as u64` 会把 `-1` **回绕**成 `18446744073709551615` ——
+    /// 于是「token 用量」变成一个天文数字，
+    /// 而所有基于它的结论（缓存省了多少 token）全部作废。
+    /// 所以这里统一走 [`normalize_usage`]。
+    pub fn add(&mut self, response: &ChatResponse) {
+        let u = normalize_usage(&response.usage);
+        self.prompt_tokens += u.prompt_tokens;
+        self.completion_tokens += u.completion_tokens;
+        self.total_tokens += u.total_tokens;
+    }
+}
+
+/// 把 provider 报的 usage 归一化成**非负**的三元组。
+///
+/// ## ⚠️ 为什么需要这一步
+///
+/// `genai::chat::Usage` 的计数是 `Option<i32>`：
+///
+/// - 缺省（`None`）→ 当作 0；
+/// - **负数** → 当作 0（**不能直接 `as u64`**，否则回绕成天文数字）；
+/// - `total` 缺省 → 用「输入 + 输出」兜底。
+///
+/// 这是**全仓统一的 usage 口径** —— 16 / 21 / 25 都走这里，
+/// 避免三份实现漂移（「16 修了但 21 没修」）。
+pub fn normalize_usage(usage: &genai::chat::Usage) -> TokenUsage {
+    let prompt = usage.prompt_tokens.unwrap_or_default().max(0) as u64;
+    let completion = usage.completion_tokens.unwrap_or_default().max(0) as u64;
+    let total = usage
+        .total_tokens
+        .unwrap_or_else(|| (prompt + completion).min(i32::MAX as u64) as i32)
+        .max(0) as u64;
+
+    TokenUsage {
+        prompt_tokens: prompt,
+        completion_tokens: completion,
+        total_tokens: total,
     }
 }
 
@@ -447,7 +484,13 @@ impl Agent {
 /// ```text
 /// The `reasoning_content` in the thinking mode must be passed back to the API.
 /// ```
-fn build_assistant_message(
+///
+/// ## ⚠️ 顺序很重要
+///
+/// **思考内容在前，工具调用在后** —— genai 的 OpenAI 适配器会把
+/// `ContentPart::ReasoningContent` 提升成请求体里的 `reasoning_content`
+/// **兄弟字段**，顺序错了 provider 会拒绝。
+pub fn build_assistant_message(
     text: String,
     reasoning: Option<String>,
     calls: &[ToolCall],
@@ -632,5 +675,60 @@ mod tests {
         let mut usage2 = TokenUsage::default();
         usage2.add(&response);
         assert_eq!(usage2.total_tokens, 15);
+    }
+
+    /// ★ 回归测试：provider 报**负数**时不能回绕成天文数字。
+    ///
+    /// 症状（修之前）：`-1 as u64` = `18446744073709551615`，
+    /// 于是「token 用量」变成一个荒谬的数字，
+    /// 所有基于它的结论（缓存省了多少 token）全部作废，
+    /// 而且**不报错**——最难发现的那类 bug。
+    #[test]
+    fn negative_usage_does_not_wrap_around() {
+        let mut usage = TokenUsage::default();
+        usage.add(&ChatResponse {
+            content: genai::chat::MessageContent::default(),
+            reasoning_content: None,
+            model_iden: genai::ModelIden::new(genai::adapter::AdapterKind::OpenAI, "m"),
+            provider_model_iden: genai::ModelIden::new(genai::adapter::AdapterKind::OpenAI, "m"),
+            stop_reason: None,
+            usage: genai::chat::Usage {
+                prompt_tokens: Some(-1),
+                completion_tokens: Some(-1),
+                prompt_tokens_details: None,
+                completion_tokens_details: None,
+                total_tokens: Some(-1),
+            },
+            captured_raw_body: None,
+            response_id: None,
+        });
+
+        assert_eq!(usage.prompt_tokens, 0);
+        assert_eq!(usage.completion_tokens, 0);
+        assert_eq!(usage.total_tokens, 0);
+    }
+
+    /// ★ 负数 + `total` 缺省时，兜底值也不能回绕。
+    #[test]
+    fn negative_usage_with_missing_total_falls_back_safely() {
+        let mut usage = TokenUsage::default();
+        usage.add(&ChatResponse {
+            content: genai::chat::MessageContent::default(),
+            reasoning_content: None,
+            model_iden: genai::ModelIden::new(genai::adapter::AdapterKind::OpenAI, "m"),
+            provider_model_iden: genai::ModelIden::new(genai::adapter::AdapterKind::OpenAI, "m"),
+            stop_reason: None,
+            usage: genai::chat::Usage {
+                prompt_tokens: Some(-5),
+                completion_tokens: Some(-5),
+                prompt_tokens_details: None,
+                completion_tokens_details: None,
+                total_tokens: None,
+            },
+            captured_raw_body: None,
+            response_id: None,
+        });
+
+        assert_eq!(usage.total_tokens, 0);
     }
 }

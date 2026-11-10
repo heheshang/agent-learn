@@ -26,7 +26,7 @@ use agent_16::agent::Agent;
 use agent_16::api::AppStateInner;
 use agent_16::config::AppConfig;
 use agent_16::functions::default_registry;
-use agent_16::llm::{GenaiFunctionLlm, ToolChoiceMode};
+use agent_16::llm::{GenaiFunctionLlm, ToolChoice};
 
 /// 默认演示问题。
 ///
@@ -44,7 +44,7 @@ async fn main() -> Result<()> {
     match demo.as_str() {
         "run" => {
             let question = arg_or_default(2, DEFAULT_QUESTION);
-            run_demo(&question, ToolChoiceMode::Auto).await?;
+            run_demo(&question, ToolChoice::Auto).await?;
         }
         "trace" => {
             let question = arg_or_default(2, DEFAULT_QUESTION);
@@ -66,7 +66,7 @@ async fn main() -> Result<()> {
         "all" => {
             tools_demo()?;
             call_demo("calculate", r#"{"expression":"(12+34)*2"}"#).await?;
-            run_demo(DEFAULT_QUESTION, ToolChoiceMode::Auto).await?;
+            run_demo(DEFAULT_QUESTION, ToolChoice::Auto).await?;
         }
         other => {
             anyhow::bail!(
@@ -178,7 +178,7 @@ async fn call_demo(tool: &str, args_json: &str) -> Result<()> {
 }
 
 /// 跑一次 Agent。
-async fn run_demo(question: &str, tool_choice: ToolChoiceMode) -> Result<()> {
+async fn run_demo(question: &str, tool_choice: ToolChoice) -> Result<()> {
     let config = AppConfig::from_env();
     let index = build_index(&config)?;
     let registry = default_registry(index);
@@ -191,7 +191,10 @@ async fn run_demo(question: &str, tool_choice: ToolChoiceMode) -> Result<()> {
 
     println!("\n=== 跑一次 Function Calling Agent ===");
     println!("问题: {question}");
-    println!("tool_choice: {}\n", tool_choice.name());
+    println!(
+        "tool_choice: {}\n",
+        agent_16::llm::tool_choice_name(&tool_choice)
+    );
 
     let run = agent.run(question).await?;
 
@@ -242,14 +245,14 @@ async fn compare_demo(question: &str) -> Result<()> {
     let llm = build_llm(&config);
 
     let mut modes = vec![
-        ToolChoiceMode::Auto,
-        ToolChoiceMode::None,
-        ToolChoiceMode::Required,
+        ToolChoice::Auto,
+        ToolChoice::None,
+        ToolChoice::Required,
     ];
 
     // `forced` 那一档需要知道工具名 —— 取注册表里的第一个。
     if let Some(first) = registry.names().first() {
-        modes.push(ToolChoiceMode::Forced(first.clone()));
+        modes.push(ToolChoice::tool(first.clone()));
     }
 
     println!("\n=== tool_choice 四档对照 ===");
@@ -263,7 +266,7 @@ async fn compare_demo(question: &str) -> Result<()> {
 
         let run = agent.run(question).await?;
 
-        println!("── {} ──", mode.name());
+        println!("── {} ──", agent_16::llm::tool_choice_name(&mode));
         println!("工具调用: {} 次 {:?}", run.tool_calls, run.tools_used);
         println!("耗时: {} ms", run.elapsed_ms);
         println!("答案: {}", truncate(&run.answer, 300));

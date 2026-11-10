@@ -90,9 +90,15 @@ graph LR
 | 来源 | 复用什么 | 自动继承的坑 |
 |---|---|---|
 | [`agent_18`] | 错误三分类 + 中间件 + 工具注册表 | 「每个 `call_id` 恰好一条回执」「Fatal 不降级」「Business 不重试」 |
-| [`agent_16`] | `ToolSpec`、参数规整 | 「Schema 是对模型的承诺」 |
+| [`agent_16`] | `ToolSpec`、参数规整、assistant 消息构造 | 「Schema 是对模型的承诺」「思考内容必须回传」 |
 | [`agent_14`] | 天气工具（真 HTTP）+ Schema 校验器 | 「参数错了别发请求」 |
 | [`agent_13`] | 算术求值器 | 「精确数字不走模型心算」 |
+
+> ⚠️ **本项目原先自己写了一份 assistant 消息构造，丢掉了 `reasoning_content`** ——
+> 复用 16 的 `agent_16::agent::build_assistant_message` 之后，
+> 思考模式一开就会被 provider 拒（400）这个**潜伏 bug** 才被消掉。
+> ⚠️ **复用 ≠ 自动生效**：复用前一个项目的类型只是第一步，
+> **语义字段必须在搬运链上全程保留**。
 
 ⚠️ **「继承」不等于「自动生效」** —— 本项目曾**声称**继承了 18 的「Fatal 不降级」，
 但因为并发层把错误类别丢在了半路，这条其实**没生效**（坑 5）。
@@ -533,15 +539,15 @@ Business 仍必须降级，否则就变成「所有错误都终止」）。
 
 ```mermaid
 graph TD
-    A["Agent.run<br/>agent.rs:240"] --> B["llm.chat_with_tools<br/>agent.rs:250"]
-    B --> C{"calls.is_empty()<br/>agent.rs:258"}
-    C -->|是| D["返回最终答案<br/>agent.rs:262"]
-    C -->|否| E["build_assistant_message<br/>agent.rs:304"]
-    E --> F["execute_calls_concurrently<br/>agent.rs:307"]
+    A["Agent.run<br/>agent.rs:255"] --> B["llm.chat_with_tools<br/>agent.rs:280"]
+    B --> C{"calls.is_empty()<br/>agent.rs:294"}
+    C -->|是| D["返回最终答案<br/>agent.rs:296"]
+    C -->|否| E["agent_16::agent::build_assistant_message<br/>（复用 16，带 reasoning_content）"]
+    E --> F["execute_calls_concurrently<br/>agent.rs:336"]
 
-    F --> G["build_tasks<br/>agent.rs:486"]
+    F --> G["build_tasks<br/>agent.rs:515"]
     G --> H["run Bounded n<br/>concurrency.rs:284"]
-    H --> I["run_one<br/>agent.rs:523"]
+    H --> I["run_one<br/>agent.rs:552"]
 
     I --> J["middleware.wrap_tool_call<br/>18-agent-error/src/middleware.rs:243"]
     J --> K{"错误类别<br/>18-agent-error/src/middleware.rs:269"}
@@ -551,11 +557,11 @@ graph TD
     K -->|Fatal| M2["★ 不降级<br/>18-agent-error/src/middleware.rs:283"]
     K -->|无错| N["成功<br/>18-agent-error/src/middleware.rs:263"]
 
-    M & M2 & N --> O["收集结果 带 index<br/>agent.rs:431"]
-    O --> P["★ 按 index 还原顺序<br/>agent.rs:430"]
-    P --> Q["★ 生成回执 一一对应<br/>agent.rs:328"]
-    Q --> R{"★ 有 Fatal?<br/>agent.rs:349"}
-    R -->|是| S["终止循环 返回 500<br/>agent.rs:369"]
+    M & M2 & N --> O["收集结果 带 index<br/>agent.rs:459"]
+    O --> P["★ 按 index 还原顺序<br/>agent.rs:482"]
+    P --> Q["★ 生成回执 一一对应<br/>agent.rs:360"]
+    Q --> R{"★ 有 Fatal?<br/>agent.rs:378"}
+    R -->|是| S["终止循环 返回 500<br/>agent.rs:392"]
     R -->|否| B
 
     style P fill:#ffcdd2
@@ -569,14 +575,14 @@ graph TD
 
 ```mermaid
 graph TD
-    A["run mode tasks<br/>concurrency.rs:284"] --> B{"mode"}
-    B -->|Sequential| C["for 循环逐个 await<br/>concurrency.rs:288"]
-    B -->|JoinAll| D["★ join_all 保序<br/>concurrency.rs:306"]
-    B -->|AsCompleted| E["★ FuturesUnordered 乱序<br/>concurrency.rs:327"]
-    B -->|Bounded n| F["★ buffer_unordered n<br/>concurrency.rs:353"]
+    A["run mode tasks<br/>concurrency.rs:294"] --> B{"mode"}
+    B -->|Sequential| C["for 循环逐个 await<br/>concurrency.rs:298"]
+    B -->|JoinAll| D["★ join_all 保序<br/>concurrency.rs:316"]
+    B -->|AsCompleted| E["★ FuturesUnordered 乱序<br/>concurrency.rs:337"]
+    B -->|Bounded n| F["★ buffer_unordered n<br/>concurrency.rs:363"]
 
-    C & D & E & F --> G["BatchReport<br/>concurrency.rs:384"]
-    G --> H["ordered_results 按 index 排序<br/>concurrency.rs:234"]
+    C & D & E & F --> G["BatchReport<br/>concurrency.rs:225"]
+    G --> H["ordered_results 按 index 排序<br/>concurrency.rs:244"]
 
     style D fill:#e1f5fe
     style E fill:#fff3e0
@@ -593,8 +599,8 @@ graph TD
     B -->|slow_report| E["★ 线程池轨道<br/>tools.rs:390"]
 
     C --> F["tokio::time::timeout<br/>tools.rs:226"]
-    F --> G["agent_14 WeatherTool<br/>tools.rs:215"]
-    D --> H["agent_13 calculate<br/>tools.rs:311"]
+    F --> G["agent_14 WeatherTool<br/>tools.rs:211"]
+    D --> H["agent_13 calculate<br/>tools.rs:296"]
     E --> I["★ spawn_blocking<br/>tools.rs:404"]
     I --> J["std::thread::sleep<br/>tools.rs:405"]
 

@@ -72,7 +72,7 @@ pub mod tools;
 pub use agent::{Agent, AgentConfig, AgentRun, StepRecord, ToolCallRecord};
 pub use config::AppConfig;
 pub use error::{AppError, AppResult, ErrorCode, ErrorKind, ToolError};
-pub use llm::{FunctionLlm, GenaiFunctionLlm, LlmStep, ScriptedLlm};
+pub use llm::{FunctionLlm, GenaiFunctionLlm, LlmStep, ScriptedLlm, ToolChoice};
 pub use middleware::{
     ErrorHandlingMiddleware, MiddlewareOutcome, RegistryHandler, ToolCallRequest, ToolHandler,
 };

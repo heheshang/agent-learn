@@ -45,7 +45,7 @@ impl agent_21::llm::FunctionLlm for EchoLlm {
         _system: &'a str,
         _messages: &'a [genai::chat::ChatMessage],
         _tools: &'a [agent_21::tools::ToolSpec],
-        _tool_choice: agent_21::llm::ToolChoiceMode,
+        _tool_choice: agent_21::llm::ToolChoice,
     ) -> agent_21::llm::FunctionLlmFuture<'a> {
         Box::pin(async move {
             Ok(agent_21::llm::ScriptedStep::Text("固定答案".to_string()).to_response())
@@ -80,7 +80,7 @@ impl agent_21::llm::FunctionLlm for CountingLlm {
         _system: &'a str,
         _messages: &'a [genai::chat::ChatMessage],
         _tools: &'a [agent_21::tools::ToolSpec],
-        _tool_choice: agent_21::llm::ToolChoiceMode,
+        _tool_choice: agent_21::llm::ToolChoice,
     ) -> agent_21::llm::FunctionLlmFuture<'a> {
         self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 
@@ -113,7 +113,7 @@ impl agent_21::llm::FunctionLlm for SlowLlm {
         _system: &'a str,
         _messages: &'a [genai::chat::ChatMessage],
         _tools: &'a [agent_21::tools::ToolSpec],
-        _tool_choice: agent_21::llm::ToolChoiceMode,
+        _tool_choice: agent_21::llm::ToolChoice,
     ) -> agent_21::llm::FunctionLlmFuture<'a> {
         self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 

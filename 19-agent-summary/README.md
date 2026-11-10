@@ -213,7 +213,7 @@ sequenceDiagram
 
 这在代码里就是 [`llm.rs:generate_text`](src/llm.rs) 和
 [`llm.rs:chat_with_tools`](src/llm.rs) 的区别 ——
-前者写死传 `&[]` 和 `ToolChoiceMode::None`。
+前者写死传 `&[]` 和 `genai::chat::ToolChoice::None`。
 
 ---
 
@@ -320,17 +320,17 @@ pub enum Grounding {
 
 ```mermaid
 graph TD
-    A["WeeklyPipeline::run<br/>pipeline.rs:103"] --> B["Agent::research<br/>agent.rs:214"]
+    A["WeeklyPipeline::run<br/>pipeline.rs:103"] --> B["Agent::research<br/>agent.rs:215"]
     B --> C["prompt::research_system<br/>prompt.rs:36"]
-    B --> D["llm.chat_with_tools<br/>agent.rs:246"]
+    B --> D["llm.chat_with_tools<br/>agent.rs:247"]
     D --> E{"有 tool_calls?"}
-    E -->|"没有"| F["return AgentRun<br/>agent.rs:269"]
-    E -->|"有"| G["middleware.wrap_tool_call<br/>agent.rs:303"]
-    G --> H["Tool::call<br/>tools.rs:180"]
+    E -->|"没有"| F["return AgentRun<br/>agent.rs:279"]
+    E -->|"有"| G["middleware.wrap_tool_call<br/>agent.rs:318"]
+    G --> H["Tool::call<br/>tools.rs:191"]
     H --> I["outcome_with_data<br/>tools.rs:72 ★"]
     I --> J["EvidenceCollector::add_from_tool_data<br/>evidence.rs:166"]
-    J --> K["render_observation<br/>agent.rs:508 ★"]
-    K --> L["ToolResponse::from_tool_call<br/>agent.rs:350 ★"]
+    J --> K["render_observation<br/>agent.rs:494 ★"]
+    K --> L["ToolResponse::from_tool_call<br/>agent.rs:365 ★"]
     L --> M{"outcome.fatal?"}
     M -->|"是"| N["return Err ★"]
     M -->|"否"| D
@@ -348,25 +348,25 @@ graph TD
 | 位置 | 为什么容易错 |
 |---|---|
 | `tools.rs:72` `outcome_with_data` | 结构化 `data` 必须**追加在 observation 末尾**，不能塞在中间 —— 中间会被截断逻辑切掉 |
-| `agent.rs:508` `render_observation` | 发给模型前必须**剥掉** `@@DATA:` 行，那坨 JSON 会占 token 还干扰模型 |
+| `agent.rs:494` `render_observation` | 发给模型前必须**剥掉** `@@DATA:` 行，那坨 JSON 会占 token 还干扰模型 |
 | `report.rs:361` `check_grounding` | 悬空引用必须**优先**判 `PartiallyGrounded`，否则幻觉被掩盖 |
 
 ### ② Agent 循环的三个不变量
 
 ```mermaid
 graph TD
-    A["Agent::research<br/>agent.rs:214"] --> B["llm.chat_with_tools<br/>agent.rs:246"]
+    A["Agent::research<br/>agent.rs:214"] --> B["llm.chat_with_tools<br/>agent.rs:247"]
     B --> C{"tool_calls 空?"}
-    C -->|"是"| D["★ 不变量2<br/>致命错误后不返回模型答案<br/>agent.rs:370"]
-    C -->|"否"| E["build_assistant_message<br/>agent.rs:420"]
-    E --> F["middleware.wrap_tool_call<br/>agent.rs:303"]
-    F --> G["★ 不变量1<br/>每个 call_id 恰好一条回执<br/>agent.rs:350"]
+    C -->|"是"| D["★ 不变量2<br/>致命错误后不返回模型答案<br/>agent.rs:392"]
+    C -->|"否"| E["agent_16::agent::build_assistant_message<br/>（复用 16，带 reasoning_content）"]
+    E --> F["middleware.wrap_tool_call<br/>agent.rs:318"]
+    F --> G["★ 不变量1<br/>每个 call_id 恰好一条回执<br/>agent.rs:365"]
     G --> H{"fatal?"}
     H -->|"是"| I["记下错误<br/>但仍生成回执 ★"]
-    H -->|"否"| J["push tool 消息<br/>agent.rs:358"]
+    H -->|"否"| J["push tool 消息<br/>agent.rs:373"]
     I --> J
     J --> B
-    B -.->|"★ 不变量3<br/>模型失败不能降级"| K["Err 上抛<br/>agent.rs:246"]
+    B -.->|"★ 不变量3<br/>模型失败不能降级"| K["Err 上抛<br/>agent.rs:247"]
 ```
 
 **不变量 1 的具体形态**：致命错误也**必须**生成 `tool` 消息 ——
@@ -379,7 +379,7 @@ graph TD
 
 ```mermaid
 graph TD
-    A["模型调 kb_search<br/>query=xyzzy"] --> B["Tool::call<br/>tools.rs:180"]
+    A["模型调 kb_search<br/>query=xyzzy"] --> B["Tool::call<br/>tools.rs:191"]
     B --> C{"查无此项?"}
     C -->|"是"| D["ToolError NotFound<br/>kind=Business ★"]
     D --> E["middleware: Business 不重试<br/>attempts=1"]
@@ -395,7 +395,7 @@ graph TD
 
 ```mermaid
 graph TD
-    A["WebSearchTool::call<br/>tools.rs:319"] --> B{"backend?"}
+    A["WebSearchTool::call<br/>tools.rs:330"] --> B{"backend?"}
     B -->|"Bing"| C["BingBackend::search<br/>search.rs:143"]
     B -->|"GitHub"| D["GithubBackend::search<br/>search.rs:291"]
     B -->|"Mock"| E["MockBackend::search<br/>search.rs:453"]
@@ -410,7 +410,7 @@ graph TD
     D --> L
     L --> M["EvidenceCollector<br/>WebSearch 证据"]
 
-    N["WebFetchTool::call<br/>tools.rs:444"] --> O{"URL 是 http/https?"}
+    N["WebFetchTool::call<br/>tools.rs:455"] --> O{"URL 是 http/https?"}
     O -->|"否"| P["ToolError InvalidArgs<br/>kind=Business"]
     O -->|"是"| Q["backend.fetch<br/>search.rs:197"]
     Q --> R["extract_main_text<br/>search.rs:563 ★"]
@@ -752,13 +752,19 @@ Schema 本地校验……
 |---|---|---|
 | [`agent_18`] | `ErrorAwareTool` / `ToolRegistry` / `ErrorHandlingMiddleware` | 「Business 不重试」「Fatal 不降级」「每个 call_id 一条回执」 |
 | [`agent_18`] | `FunctionLlm` / `GenaiFunctionLlm` / `ScriptedLlm` | 「模型调用失败不能降级」 |
-| [`agent_16`] | `ToolSpec` / `ToolChoiceMode` | 「Schema 是对模型的承诺」 |
+| [`agent_16`] | `ToolSpec` / `genai::chat::ToolChoice` / assistant 消息构造 / 参数规整 | 「Schema 是对模型的承诺」「思考内容必须回传」 |
 | [`agent_17`] | `MemoryStore` / `MemoryRetriever` / `MemoryFact` | 「同 key 合并、旧值进 versions」 |
 | [`agent_14`] | JSON Schema 子集校验器 | 「参数错了别发请求」 |
 | [`agent_13`] | `calculate`（手写算术求值器） | 「统计数字不走模型心算」 |
 | [`rag_08`] | `Bm25Index` / `build_bm25` | 「BM25 用块正文，不含标题」 |
 | [`rag_04`] | `SplitterConfig` | 分块口径与向量索引一致 |
 | [`agent_logging`] | `init` / `trace_layer` / `info!` `warn!` `error!` | 「4xx 用 warn、5xx 用 error」「降级必须打 warn」 |
+
+> ⚠️ **本项目原先自己写了一份 assistant 消息构造，丢掉了 `reasoning_content`** ——
+> 复用 16 的 `agent_16::agent::build_assistant_message` 之后，
+> 思考模式一开就会被 provider 拒（400）这个**潜伏 bug** 才被消掉。
+> ⚠️ **复用 ≠ 自动生效**：复用前一个项目的类型只是第一步，
+> **语义字段必须在搬运链上全程保留**。
 
 ---
 

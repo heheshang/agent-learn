@@ -382,7 +382,8 @@ sequenceDiagram
 | `cache/control.rs:CacheControl::is_too_old` | `s-maxage` 比较的是 `stored_at_ms`（写入时刻），**不是** Redis 的 TTL（剩余寿命）。两者不等价 |
 | `cache/service.rs:CacheService::get_response` | 读失败要 `warn!` + 当 miss，**不能**重试（缓存在关键路径外，重试只会更慢） |
 | `agent.rs:CachedAgent::execute_call` | 只缓存**成功**的工具结果。缓存失败结果会让模型「反复看到同一个错误」 |
-| `agent.rs:build_assistant_message` | 思考内容必须在工具调用**之前**（16 的坑 2） |
+| `agent_16::agent::build_assistant_message` | 思考内容必须在工具调用**之前**（16 的坑 2）—— 21 直接复用，不自己抄一份 |
+| `agent_16::agent::normalize_usage` | token 计数是 `Option<i32>`，provider 异常时可能回**负数**。直接 `as u64` 会**回绕**成 `18446744073709551615`（天文数字且不报错）—— 必须先归一化 |
 | ★ `agent.rs:assign_deterministic_call_ids` 的调用位置 | 必须**只改 `calls` 里的 ID** —— assistant 消息和 tool 回执**都**从它取 ID，改一处就自动同步两处。分开改必然漏 |
 | ★ `agent.rs` 的写缓存条件 | `is_final_round \|\| self.cache_intermediate_rounds`。**中间轮也写**才是 agentic 能命中的关键；但代价是命中会跳过工具执行 |
 | ★ `cache/call_id.rs:canonical_args` | 参数的 JSON **键序**必须规范化（递归排序）。`serde_json` 开了 `preserve_order` 就是插入序 → 同一个调用算出两个 ID |

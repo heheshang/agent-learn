@@ -51,7 +51,7 @@
 //! | 来源 | 复用什么 | 继承的坑 |
 //! |---|---|---|
 //! | [`agent_18`] | 错误分类中间件、`ErrorAwareTool` | 重试/降级/终止三态、「每个 call_id 一条回执」 |
-//! | [`agent_16`] | `ToolSpec`、`ToolChoiceMode` | 「Schema 是对模型的承诺」、`tool_choice` 四档 |
+//! | [`agent_16`] | `ToolSpec`、`genai::chat::ToolChoice` | 「Schema 是对模型的承诺」、`tool_choice` 四档 |
 //! | [`agent_17`] | 长期记忆（事实存储 + BM25 召回） | 「事实只进 system 提示，不进消息数组」 |
 //! | [`agent_14`] | JSON Schema 子集校验器 | 「参数错了别发请求」 |
 //! | [`agent_13`] | 手写算术求值器 | 「统计数字不走模型心算」 |

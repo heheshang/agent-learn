@@ -45,13 +45,14 @@
 use std::sync::Arc;
 use std::time::Instant;
 
+use agent_16::agent::{build_assistant_message, normalize_arguments};
 use agent_logging::{debug, info, warn};
 use genai::chat::{ChatMessage, MessageContent, ToolCall, ToolResponse};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::error::{AppError, AppResult};
-use crate::llm::{FunctionLlm, ToolChoiceMode};
+use crate::llm::{FunctionLlm, ToolChoice};
 use crate::middleware::{ErrorHandlingMiddleware, MiddlewareOutcome, ToolCallRequest};
 use crate::prompt;
 use crate::tools::ToolSpec;
@@ -174,14 +175,14 @@ pub struct AgentConfig {
     pub max_steps: usize,
 
     /// 工具选择策略。
-    pub tool_choice: ToolChoiceMode,
+    pub tool_choice: ToolChoice,
 }
 
 impl Default for AgentConfig {
     fn default() -> Self {
         Self {
             max_steps: 5,
-            tool_choice: ToolChoiceMode::Auto,
+            tool_choice: ToolChoice::Auto,
         }
     }
 }
@@ -259,6 +260,13 @@ impl Agent {
                 .await?;
 
             let text = response.first_text().unwrap_or_default().to_string();
+            // ⚠️★ 思考内容**必须回传**（16 的坑 2）——
+            //    推理模型在思考模式下要求把 `reasoning_content` 原样带回，
+            //    否则下一轮请求直接 400：
+            //    `The reasoning_content in the thinking mode must be passed back to the API.`
+            //
+            //    本项目原先**没有**回传，思考模式一开就 400（潜伏的真 bug）。
+            let reasoning = response.reasoning_content.clone();
             let calls: Vec<ToolCall> = response.into_tool_calls();
 
             // ── 没有工具调用 → 最终答案 ─────────────────────────
@@ -295,7 +303,15 @@ impl Agent {
             }
 
             // ── 有工具调用 → 走中间件 ──────────────────────────
-            messages.push(build_assistant_message(text.clone(), &calls));
+            //
+            // ⚠️ 复用 16 的 `build_assistant_message`（带 reasoning_content）——
+            //    本项目原先自己写了一份**不带**思考内容的版本，
+            //    思考模式一开就会被 provider 拒（400）。
+            messages.push(build_assistant_message(
+                text.clone(),
+                reasoning.clone(),
+                &calls,
+            ));
 
             let mut records = Vec::with_capacity(calls.len());
             let mut responses: Vec<ToolResponse> = Vec::with_capacity(calls.len());
@@ -393,35 +409,6 @@ impl Agent {
             elapsed_ms: start.elapsed().as_millis() as u64,
             model: self.llm.model_name().to_string(),
         })
-    }
-}
-
-/// 构造 assistant 消息（带工具调用）。
-fn build_assistant_message(text: String, calls: &[ToolCall]) -> ChatMessage {
-    let mut parts: Vec<genai::chat::ContentPart> = Vec::new();
-
-    if !text.is_empty() {
-        parts.push(genai::chat::ContentPart::Text(text));
-    }
-    for call in calls {
-        parts.push(genai::chat::ContentPart::ToolCall(call.clone()));
-    }
-
-    ChatMessage::assistant(MessageContent::from_parts(parts))
-}
-
-/// 把工具参数规整成 JSON 对象。
-///
-/// 和 16 同理：有些模型会把 `arguments` 序列化成 JSON 字符串。
-pub fn normalize_arguments(args: &Value) -> Value {
-    match args {
-        Value::Object(_) => args.clone(),
-        Value::String(text) => match serde_json::from_str::<Value>(text) {
-            Ok(parsed @ Value::Object(_)) => parsed,
-            _ => args.clone(),
-        },
-        Value::Null => Value::Object(serde_json::Map::new()),
-        other => other.clone(),
     }
 }
 

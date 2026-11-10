@@ -16,8 +16,18 @@
 //! | 产出 | 说明 |
 //! |---|---|
 //! | [`ToolSpec`] | 工具的「四要素」：名字 / 描述 / 参数 Schema / 严格模式 |
-//! | [`ToolSpec::to_genai_tool`] | 翻译成 `genai::chat::Tool` |
-//! | [`strict_schema`] | 把 Schema 改写成 **strict 模式**合规的形态 |
+//! | [`ToolSpec::to_genai_tool`] | 翻译成 `genai::chat::Tool`（**原样透传**，消毒由适配器做） |
+//! | [`strict_schema`] | ★ **薄封装** [`genai::chat::sanitize_json_schema`]（OpenAI strict 方言） |
+//!
+//! ## ⚠️★ Schema 消毒**不自己实现**
+//!
+//! strict 模式的改写（所有字段进 `required`、每层补
+//! `additionalProperties: false`、内联 `$ref`）由 **genai 适配器**
+//! 在发请求前按 **provider 方言**完成。
+//!
+//! **自己改写 Schema = 与 provider 的校验规则漂移** ——
+//! 本项目早先有一版手写 `strict_schema`（只改根层，**嵌套对象完全没处理**），
+//! 正是这个问题的实例。
 //!
 //! ## strict 模式的硬约束（来自 OpenAI 文档）
 //!
@@ -126,24 +136,39 @@ impl ToolSpec {
 
     /// 翻译成 `genai::chat::Tool`。
     ///
-    /// ## 为什么在这里做 strict 改写
+    /// ## ⚠️★ Schema 的消毒**交给 genai 适配器**（不再自己改写）
     ///
     /// OpenAI 的 strict 模式要求 `additionalProperties: false`
-    /// 且所有字段进 `required`。
-    /// 如果直接发原始 Schema 给 `strict: true` 的工具，
-    /// OpenAI 会**拒绝整个请求**（不是降级，是报错）。
+    /// 且所有字段进 `required`。这件事**由适配器在发请求前完成**：
     ///
-    /// 所以必须在**发送前**把 Schema 改写成合规形态。
+    /// - OpenAI / DeepSeek 走 OpenAI 适配器 → `sanitize_json_schema(schema, OpenAiStrictTool)`
+    ///   （所有 `properties` 进 `required`、递归补 `additionalProperties: false`、内联 `$ref`）
+    /// - Anthropic → `sanitize_json_schema(schema, AnthropicStructured)`
+    ///
+    /// ## ★ 为什么**不自己**改写
+    ///
+    /// **自己改写 = 与 provider 的校验规则漂移。**
+    /// 手写版只覆盖了「根层 + 一层嵌套」这种已知形状；
+    /// provider 升级了规则（比如加了 `$ref` 内联、tuple 类型），
+    /// 本地手写版就过时了 —— 症状是 provider 报一个看不懂的 400。
+    ///
+    /// 本项目早先有一版手写 `strict_schema`（只改根层 `required` /
+    /// `additionalProperties`，**嵌套对象完全没处理**），
+    /// 正是这个问题的实例。现在它已被
+    /// [`genai::chat::sanitize_json_schema`] 取代。
+    ///
+    /// ⚠️ 本地**仍然**要做业务级校验（复用 14 的 `agent_14::schema`）——
+    /// strict 只是「锦上添花」，DeepSeek 实测**接受但不强制**它，
+    /// 参数正确性不能外包给模型。
     pub fn to_genai_tool(&self) -> genai::chat::Tool {
-        let schema = if self.strict {
-            strict_schema(&self.schema)
-        } else {
-            self.schema.clone()
-        };
-
+        // ⚠️ 这里**原样**透传 Schema —— 消毒由适配器按 provider 方言做。
+        //
+        //    如果在这里再 sanitize 一次，等于「改写两遍」：
+        //    第一遍按 OpenAI 方言，第二遍适配器又按 provider 方言 ——
+        //    对 OpenAI 幂等，对 Anthropic 就**方言冲突**了。
         genai::chat::Tool::new(self.name.clone())
             .with_description(self.description.clone())
-            .with_schema(schema)
+            .with_schema(self.schema.clone())
             .with_strict(self.strict)
     }
 
@@ -155,67 +180,49 @@ impl ToolSpec {
 
 /// 把 Schema 改写成 **strict 模式**合规的形态。
 ///
-/// ## 改写规则
+/// ## ⚠️★ 本函数现在是 [`genai::chat::sanitize_json_schema`] 的**薄封装**
+///
+/// ## 为什么不再自己实现
+///
+/// 手写版只覆盖了「根层 + 一层嵌套」这种**已知形状**：
 ///
 /// 1. 根对象加 `additionalProperties: false`
 /// 2. 根对象 `required` 补齐**所有** `properties` 的键
 /// 3. 每个子对象同样处理（递归）
-/// 4. `type` 是数组时（`["string","null"]`）**不动** —— 那是合法的可选字段写法
+/// 4. `type` 是数组时（`["string","null"]`）**不动**
 ///
-/// ## 为什么「补齐 required」而不是「报错」
+/// ⚠️ **自己改写 Schema = 与 provider 的校验规则漂移。**
+/// 手写版不知道 provider 后来加的规则（`$ref` 内联、tuple 类型、
+/// `unevaluatedProperties`…），症状是 provider 报一个看不懂的 400。
 ///
-/// OpenAI 文档说：schema 不满足 strict 要求时**请求会被拒绝**。
-/// 但我们更希望「工具能用，只是模型必须填所有字段」。
+/// crate 版按 **provider 方言**改写，三种方言：
 ///
-/// ⚠️ 这里的选择有代价：把一个本来可选的字段变成必填，
-/// 模型就必须给一个值 —— 通常是 `null`。
-/// 所以**只有真正可选的字段**才应该用 `["string","null"]` 表达。
+/// | 方言 | 用在哪 |
+/// |---|---|
+/// | `OpenAiStrictTool` | OpenAI / DeepSeek 的 function 参数（要求显式 object 根） |
+/// | `OpenAiStrict` | OpenAI 的结构化输出（`response_format`） |
+/// | `AnthropicStructured` | Anthropic 的 JSON 输出与工具 |
 ///
-/// ## 不改动 `type` 数组的含义
+/// ## 为什么仍然保留这个函数（而不是直接删掉）
 ///
-/// `{"type": ["string", "null"]}` 在 strict 模式下是**官方推荐**的
-/// 「可选字段」写法 —— 它本来就同时是 required 和可为 null。
+/// ① 它是**本项目的公开 API**（`agent_16::tools::strict_schema`），
+///    18-agent-error 直接 `pub use` 它；
+/// ② 它让「strict 模式下 Schema 长什么样」在**本地**可测 ——
+///
+///    ⚠️ **本地可测 ≠ 本地生效**。
+///    真正发给 provider 的 Schema 是适配器消毒后的版本，
+///    本函数只是让测试能断言「按 OpenAI strict 方言应该长什么样」。
+///
+/// ## 递归是**必须**的
+///
+/// 手写版最大的缺陷：只改了根层。嵌套对象的 `required` 没补、
+/// `additionalProperties` 没加 —— 而 strict 方言要求**每一层**都满足。
+/// crate 版是递归的。
 pub fn strict_schema(schema: &Value) -> Value {
-    let mut out = schema.clone();
-
-    if let Some(obj) = out.as_object_mut() {
-        // 根必须是 object 才有 strict 语义。
-        let is_object = obj.get("type").and_then(Value::as_str) == Some("object")
-            || obj.contains_key("properties");
-
-        if is_object {
-            obj.insert("additionalProperties".to_string(), Value::Bool(false));
-
-            // 补齐 required。
-            if let Some(Value::Object(props)) = obj.get("properties") {
-                let mut required: Vec<Value> = obj
-                    .get("required")
-                    .and_then(Value::as_array)
-                    .cloned()
-                    .unwrap_or_default();
-
-                for key in props.keys() {
-                    if !required.iter().any(|v| v.as_str() == Some(key.as_str())) {
-                        required.push(Value::String(key.clone()));
-                    }
-                }
-
-                obj.insert("required".to_string(), Value::Array(required));
-            }
-        }
-
-        // 递归处理子对象。
-        if let Some(Value::Object(props)) = obj.get_mut("properties") {
-            for (_, sub) in props.iter_mut() {
-                *sub = strict_schema(sub);
-            }
-        }
-        if let Some(items) = obj.get_mut("items") {
-            *items = strict_schema(items);
-        }
-    }
-
-    out
+    genai::chat::sanitize_json_schema(
+        schema,
+        genai::chat::JsonSchemaDialect::OpenAiStrictTool,
+    )
 }
 
 /// 检查一个工具名是否合法。
@@ -388,7 +395,7 @@ mod tests {
     }
 
     #[test]
-    fn strict_schema_preserves_existing_required_order() {
+    fn strict_schema_keeps_all_properties_required() {
         let schema = json!({
             "type": "object",
             "properties": {
@@ -400,14 +407,29 @@ mod tests {
         });
 
         let out = strict_schema(&schema);
-        // 原有顺序保留，新字段追加在后。
+
+        // ★ crate 版按 **`properties` 的键序**排列 `required`，
+        // **不保留**原 `required` 的顺序（原顺序里的成员也不会丢）。
+        //
+        // ⚠️ 手写版是「保留原顺序 + 追加新字段」——
+        //    两者的**顺序**不同，但**集合**相同。
+        //    对 provider 而言顺序无语义（`required` 是集合），
+        //    所以这是**行为等价**而非行为变更。
+        //
+        // ⚠️ 差异的来源：手写版是「在原 required 上追加」，
+        //    crate 版是「从 properties 的键重新生成，再并入原 required 的多余项」。
         let required: Vec<&str> = out["required"]
             .as_array()
             .unwrap()
             .iter()
             .filter_map(|v| v.as_str())
             .collect();
-        assert_eq!(required, vec!["c", "a", "b"]);
+
+        // 集合相同 —— 三个字段都必须必填。
+        assert_eq!(required.len(), 3);
+        assert!(required.contains(&"a"));
+        assert!(required.contains(&"b"));
+        assert!(required.contains(&"c"));
     }
 
     #[test]
@@ -573,9 +595,126 @@ mod tests {
         let tool = spec.to_genai_tool();
         assert_eq!(tool.name.as_str(), "get_weather");
         assert_eq!(tool.strict, Some(true));
-        // strict 模式下 additionalProperties 被补上。
-        let schema = tool.schema.unwrap();
-        assert_eq!(schema["additionalProperties"], json!(false));
+        // ⚠️★ Schema **原样透传** —— 消毒由适配器在发请求前做。
+        //
+        //    如果这里断言 schema 已被改写，就等于把「本地改写」钉死了，
+        //    正是本次重构要移除的行为。
+        assert_eq!(
+            tool.schema.unwrap(),
+            json!({
+                "type": "object",
+                "properties": { "city": { "type": "string" } },
+                "required": ["city"]
+            })
+        );
+    }
+
+    /// ★ strict 的 Schema 消毒**由 genai 适配器**完成（本地不预改写）。
+    ///
+    /// 回归测试：修复前 `to_genai_tool` 会**自己**调 `strict_schema` 改写一遍，
+    /// 导致「改写两遍」—— 对 OpenAI 幂等，对 Anthropic 就是**方言冲突**。
+    #[test]
+    fn to_genai_tool_does_not_presanitize_the_schema() {
+        let spec = ToolSpec::strict(
+            "t",
+            "d",
+            json!({
+                "type": "object",
+                "properties": { "a": { "type": "string" }, "b": { "type": "string" } },
+                "required": ["a"]
+            }),
+        );
+
+        let tool = spec.to_genai_tool();
+
+        // ⚠️ `b` 仍在 `required` 之外 —— 说明本地**没有**预改写。
+        assert_eq!(tool.schema.unwrap()["required"], json!(["a"]));
+        // strict 标记必须透传 —— 适配器据此决定要不要 sanitize。
+        assert_eq!(tool.strict, Some(true));
+    }
+
+    /// ★ 适配器消毒的效果在本地**可验证**（按 OpenAI strict 方言）。
+    ///
+    /// 这才是 `strict_schema` 存在的意义：
+    /// 让「strict 模式下 Schema 应该长什么样」可在本地断言，
+    /// 而**实际发给 provider 的**是适配器消毒后的版本。
+    #[test]
+    fn strict_schema_matches_the_openai_strict_dialect() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "a": { "type": "string" },
+                "nested": {
+                    "type": "object",
+                    "properties": { "x": { "type": "integer" }, "y": { "type": "integer" } },
+                    "required": ["x"]
+                }
+            },
+            "required": ["a"]
+        });
+
+        let out = strict_schema(&schema);
+
+        // 根层：全部字段必填 + 禁止额外字段。
+        let required = out["required"].as_array().unwrap();
+        assert!(required.contains(&json!("a")));
+        assert!(required.contains(&json!("nested")));
+        assert_eq!(out["additionalProperties"], json!(false));
+
+        // ★ 嵌套层也要处理 —— 手写版漏了这一步。
+        let nested_required = out["properties"]["nested"]["required"].as_array().unwrap();
+        assert!(nested_required.contains(&json!("x")));
+        assert!(nested_required.contains(&json!("y")));
+        assert_eq!(
+            out["properties"]["nested"]["additionalProperties"],
+            json!(false)
+        );
+    }
+
+    /// ★ `$ref` 的内联规则比想象的**窄** —— 只有「带注解兄弟」的才会内联。
+    ///
+    /// crate 的判据是 `map.len() > 1`（见 `json_schema.rs` 的
+    /// `inline_ref_annotations` 分支）：
+    ///
+    /// - `{"$ref": "#/$defs/X"}`（**裸引用**）→ **保留原样**
+    /// - `{"$ref": "#/$defs/X", "description": "..."}`（带注解兄弟）→ **内联**
+    ///
+    /// ## 为什么裸引用**不**内联
+    ///
+    /// 因为 OpenAI 拒绝的是「`$ref` **带**兄弟注解」——
+    /// 纯 `$ref` 本身是合法的。crate 只在**必须**时才动它，
+    /// 避免「为了内联而内联」把 Schema 结构改得面目全非。
+    ///
+    /// ⚠️ 这正是「自己改写 = 与 provider 规则漂移」的又一个实例 ——
+    /// 手写版**根本不知道**这条规则（它压根不处理 `$ref`）。
+    #[test]
+    fn strict_schema_inlines_refs_only_when_annotations_are_present() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "bare": { "$ref": "#/$defs/point" },
+                "annotated": { "$ref": "#/$defs/point", "description": "一个点" }
+            },
+            "required": ["bare", "annotated"],
+            "$defs": {
+                "point": {
+                    "type": "object",
+                    "properties": { "x": { "type": "integer" } },
+                    "required": ["x"]
+                }
+            }
+        });
+
+        let out = strict_schema(&schema);
+
+        // ⚠️ 裸引用**保留** —— crate 只内联带注解兄弟的。
+        assert_eq!(out["properties"]["bare"], json!({"$ref": "#/$defs/point"}));
+
+        // 带注解兄弟的**被内联**，且注解保留。
+        let annotated = &out["properties"]["annotated"];
+        assert!(annotated.get("$ref").is_none(), "带注解的 $ref 应被内联");
+        assert_eq!(annotated["type"], json!("object"));
+        assert_eq!(annotated["description"], json!("一个点"));
     }
 
     #[test]

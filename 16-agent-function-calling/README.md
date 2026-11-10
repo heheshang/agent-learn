@@ -12,8 +12,12 @@
 工具定义放进 API 的 `tools` 字段，模型返回**结构化的 JSON 工具调用**，
 你执行完再用 `tool` 角色的消息把结果回传。
 
-**核心产出**：一个真正走结构化协议的 Agent + **四个实测踩出来的坑** +
+**核心产出**：一个真正走结构化协议的 Agent + **实测踩出来的坑** +
 一组 `tool_choice` 四档消融对照。
+
+> **端口**：3090 ｜ 测试 **93 项**（单元 71 + 集成 22），零网络零模型确定性
+> ⚠️ **Schema 消毒交给 `genai` 适配器**（`sanitize_json_schema` + provider 方言），
+> 本项目**不再手写**改写逻辑 —— 见「附加坑 7」。
 
 ---
 
@@ -24,7 +28,7 @@
 - [三、核心流程图](#三核心流程图)
 - [四、代码调用详细流程图（函数级）](#四代码调用详细流程图函数级)
 - [五、时序图](#五时序图)
-- [六、四个实测踩出来的坑](#六四个实测踩出来的坑)
+- [六、实测踩出来的坑](#六实测踩出来的坑)
 - [七、tool_choice 四档消融对照](#七tool_choice-四档消融对照)
 - [八、三个工具](#八三个工具)
 - [九、strict 模式与本地校验](#九strict-模式与本地校验)
@@ -72,7 +76,7 @@ graph TB
         AGENT["agent.rs<br/>★ Function Calling 循环"]
         LLM["llm.rs<br/>带工具的 LLM 抽象"]
         PROMPT["prompt.rs<br/>提示词组装"]
-        TOOLS["tools.rs<br/>工具定义 + strict Schema"]
+        TOOLS["tools.rs<br/>工具定义（Schema 交给适配器消毒）"]
         TOOL["tool.rs<br/>trait + 注册表 + 校验"]
         FUNCS["functions.rs<br/>三个具体工具"]
     end
@@ -116,7 +120,7 @@ graph TB
 
 | 模块 | 职责 | 对应 OpenAI 概念 |
 |---|---|---|
-| `tools.rs` | 工具定义 + **strict Schema 改写** + 合规自检 | `tools` 参数 / strict mode |
+| `tools.rs` | 工具定义（Schema **原样透传**给适配器消毒）+ 合规自检 | `tools` 参数 / strict mode |
 | `tool.rs` | `FunctionTool` trait / 注册表 / 参数校验 / 失败转回执 | 工具执行 + 校验 |
 | `functions.rs` | 三个具体工具（天气 / 知识库 / 计算） | function 定义 |
 | `agent.rs` | ★ **Function Calling 循环** | 五步调用流程 |
@@ -219,7 +223,7 @@ flowchart TD
     REG --> W["functions.rs:122<br/>WeatherTool::new()"]
     REG --> K["functions.rs:210<br/>KnowledgeTool::new()"]
     REG --> C["functions.rs:283<br/>CalculateTool::default()"]
-    LLM --> GENAI["llm.rs:217<br/>GenaiFunctionLlm::new()"]
+    LLM --> GENAI["llm.rs:212<br/>GenaiFunctionLlm::new()"]
 
     style NEW fill:#e8f4ff,stroke:#4a90d9,stroke-width:2px
     style NEW2 fill:#e8f4ff,stroke:#4a90d9,stroke-width:2px
@@ -232,23 +236,23 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    RUN["agent.rs:250<br/>Agent::run(question)"] --> SPECS["tool.rs:186<br/>registry.specs()"]
+    RUN["agent.rs:287<br/>Agent::run(question)"] --> SPECS["tool.rs:186<br/>registry.specs()"]
     RUN --> SYSP["prompt.rs:51<br/>system_prompt(specs, strict)"]
     RUN --> LOOP["for step_no in 1..=max_steps"]
 
-    LOOP --> CHAT["llm.rs:229<br/>GenaiFunctionLlm::chat_with_tools()"]
-    CHAT --> REQ["agent.rs:524<br/>build_request()"]
+    LOOP --> CHAT["llm.rs:224<br/>GenaiFunctionLlm::chat_with_tools()"]
+    CHAT --> REQ["agent.rs:567<br/>build_request()"]
     REQ --> API["DeepSeek API<br/>tools + messages"]
 
     API --> RESP{"响应里有<br/>tool_calls?"}
     RESP -->|"没有"| FINAL["★ agent.rs:296<br/>直接返回答案"]
     FINAL --> DONE(["返回 AgentRun"])
 
-    RESP -->|"有"| ASM["agent.rs:329<br/>build_assistant_message()"]
-    ASM -.->|"⚠️ 坑 2：必须带<br/>reasoning_content"| ASMDETAIL["agent.rs:450<br/>build_assistant_message(text, reasoning, calls)"]
+    RESP -->|"有"| ASM["agent.rs:366<br/>build_assistant_message()"]
+    ASM -.->|"⚠️ 坑 2：必须带<br/>reasoning_content"| ASMDETAIL["agent.rs:493<br/>build_assistant_message(text, reasoning, calls)"]
 
-    ASM --> EXEC["agent.rs:426<br/>execute_call(call, ctx)"]
-    EXEC --> NORM["agent.rs:487<br/>normalize_arguments()"]
+    ASM --> EXEC["agent.rs:463<br/>execute_call(call, ctx)"]
+    EXEC --> NORM["agent.rs:530<br/>normalize_arguments()"]
     NORM --> REGCALL["tool.rs:221<br/>registry.call()"]
 
     REGCALL --> INNER["tool.rs:248<br/>call_inner()"]
@@ -273,7 +277,7 @@ flowchart TD
     K --> RECEIPT
     C --> RECEIPT
 
-    RECEIPT["★ agent.rs:379<br/>ChatMessage::tool(call_id, obs)<br/>失败也必须有回执"]
+    RECEIPT["★ agent.rs:416<br/>ChatMessage::tool(call_id, obs)<br/>失败也必须有回执"]
     RECEIPT --> LOOP
     LOOP -->|"步数超限"| DEGRADE["agent.rs:约 400<br/>降级返回<br/>不报错，保留已收集结果"]
 
@@ -290,7 +294,7 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    A["agent.rs:436<br/>registry.call(name, args, ctx)"] --> B["tool.rs:248<br/>call_inner()"]
+    A["agent.rs:473<br/>registry.call(name, args, ctx)"] --> B["tool.rs:248<br/>call_inner()"]
     B --> C{"args 是 JSON 对象?"}
     C -->|"不是"| E1["❌ ToolError::invalid_args()<br/>「必须是 JSON 对象，实际是 string」"]
     C -->|"是"| D["tool.rs:280<br/>fill_defaults(schema, object)"]
@@ -301,7 +305,7 @@ flowchart TD
     G --> H{"工具执行成功?"}
     H -->|"是"| I["✅ ToolOutcome::ok()"]
     H -->|"否"| J["❌ ToolOutcome::failed()"]
-    I --> K["agent.rs:375<br/>→ ToolResponse::from_tool_call()"]
+    I --> K["agent.rs:410<br/>→ ToolResponse::from_tool_call()"]
     J --> K
     E1 --> K
     E2 --> K
@@ -334,10 +338,10 @@ flowchart LR
     AG3 --> R3["Agent::run()"]
     AG4 --> R4["Agent::run()"]
 
-    R1 --> TO1["llm.rs:143<br/>ToolChoiceMode::to_genai()"]
-    R2 --> TO2["to_genai()"]
-    R3 --> TO3["to_genai()"]
-    R4 --> TO4["to_genai()"]
+    R1 --> TO1["llm.rs<br/>genai::chat::ToolChoice（直接用 crate 的）"]
+    R2 --> TO2["with_tool_choice(choice)"]
+    R3 --> TO3["with_tool_choice(choice)"]
+    R4 --> TO4["with_tool_choice(choice)"]
 
     style M1 fill:#e8f5e9,stroke:#4caf50,stroke-width:2px
     style M2 fill:#ffe6e6,stroke:#d94a4a
@@ -412,7 +416,7 @@ sequenceDiagram
 
 ---
 
-## 六、四个实测踩出来的坑
+## 六、实测踩出来的坑
 
 **这是本项目最有价值的部分** —— 全部来自对 DeepSeek API 的真实探测（`deepseek-flash` / `deepseek-chat`）。
 
@@ -517,6 +521,37 @@ OpenAI 文档说 strict 能「确保函数调用可靠地遵守 schema」，
 > 都在撞一堵看不见的墙。
 >
 > 这个 bug 已被修掉，但教训留在了 `functions.rs` 的注释里。
+
+### 附加坑 6：token 计数对**负数**回绕
+
+`genai` 的 `chat::Usage` 三个计数都是 `Option<i32>`，
+而 provider 在异常时可能回**负数**。
+
+```rust
+// ❌ 修之前的写法
+let prompt = response.usage.prompt_tokens.unwrap_or(0) as u64;
+// -1 as u64 == 18446744073709551615
+```
+
+于是「token 用量」变成一个天文数字，
+而且**不报错** —— 所有基于它的结论（缓存省了多少 token）全部作废。
+
+> **修法**：统一走 `agent_16::agent::normalize_usage`，
+> 负数归零、`total` 缺省时用「输入 + 输出」兜底。
+> 有回归测试 `negative_usage_does_not_wrap_around` 锁住。
+
+### 附加坑 7：Schema 消毒**不要自己改写**
+
+本项目原先有一版手写 `strict_schema`，只改**根层**的
+`required` / `additionalProperties` —— **嵌套对象完全没处理**，
+而 OpenAI 的 strict 方言要求**每一层**都满足，
+于是模型一传嵌套参数，provider 侧的 constrained decoding 直接拒绝。
+
+> **修法**：**不自己改写**，
+> 把 Schema 原样交给 genai，由适配器按 provider 方言处理
+> （`OpenAiStrictTool` / `OpenAiStrict` / `AnthropicStructured`）。
+> ⚠️ **自己改写 Schema = 与 provider 的校验规则漂移** ——
+> 症状是「provider 报了个看不懂的 400」。
 
 ---
 
@@ -697,9 +732,12 @@ graph TB
 | `strict: true` | 讨好 OpenAI，让它真的强制执行 | ❌ 对 DeepSeek **不可靠**（实测） |
 | 本地 Schema 校验 | 兜底 —— 参数错就**不发请求** | ✅ **可靠** |
 
-`strict_schema()` 负责把 Schema 改写成合规形态，
-`check_strict_compliance()` 负责**自检** —— 单元测试里断言我们的 Schema 合规，
-避免线上才发现「OpenAI 拒绝了整个请求」。
+> ⚠️ **Schema 的消毒已经交给 `genai` 适配器**（`sanitize_json_schema` + provider 方言），
+> 本项目**不再手写**改写逻辑。详见 25-agent-summary 的「Schema 消毒」一节 ——
+> 手写版只改根层，嵌套对象会漏。
+>
+> `check_strict_compliance()` 仍然保留 —— 它是**自检**（单元测试里断言我们的 Schema 合规），
+> 避免线上才发现「OpenAI 拒绝了整个请求」。
 
 ### ⚠️ 为什么本项目的工具**不开** strict
 
@@ -744,10 +782,10 @@ graph LR
     end
 
     subgraph IMPL["本项目实现"]
-        I1["tools.rs<br/>ToolSpec + strict_schema"]
+        I1["tools.rs<br/>ToolSpec（Schema 原样透传给适配器）"]
         I2["agent.rs<br/>五步循环 + 回执对账"]
         I3["tool.rs<br/>注册表 + 校验 + 失败转观察"]
-        I4["llm.rs<br/>ToolChoiceMode 四档"]
+        I4["llm.rs<br/>genai::chat::ToolChoice 四档"]
         I5["prompt.rs<br/>三段式提示词"]
     end
 
@@ -891,9 +929,9 @@ make test
 
 | 测试类型 | 数量 | 覆盖什么 |
 |---|---|---|
-| 单元测试 | 65 | Schema 改写 / 注册表 / 提示词 / 配置 / 严格模式自检 |
+| 单元测试 | 71 | Schema 透传 / usage 归一化 / 注册表 / 提示词 / 配置 / 严格模式自检 |
 | 集成测试 | 22 | 循环控制流 + HTTP 契约 |
-| **合计** | **87** | **零网络、零延迟、完全确定** |
+| **合计** | **93** | **零网络、零延迟、完全确定** |
 
 ### 被锁住的关键行为
 
@@ -907,6 +945,8 @@ make test
 | `degrades_when_the_step_limit_is_reached` | 步数超限要**降级**而不是报错 |
 | `call_tool_endpoint_returns_400_for_an_unknown_tool` | 错误码语义 |
 | `optional_parameters_use_defaults_not_strict` | 有默认值的工具**不能**开 strict |
+| `negative_usage_does_not_wrap_around` | **附加坑 6** —— token 计数对负数回绕 |
+| `tool_choice_maps_are_identity` | **重复定义会漂移** —— 直接用 crate 的 `ToolChoice` |
 
 测试用 `ScriptedFunctionLlm` 把模型输出**钉死** ——
 用真实模型测这些行为是**不可靠**的（模型今天返回 2 个调用，
@@ -923,8 +963,8 @@ make test
 | 工具定义 | `ToolSpec::to_genai_tool()` → `tools` 字段 | [Defining functions](https://platform.openai.com/docs/guides/function-calling#defining-functions) |
 | 工具调用 | `response.into_tool_calls()` | [Handling function calls](https://platform.openai.com/docs/guides/function-calling#handling-function-calls) |
 | 工具输出 | `ChatMessage::tool(...)` + `tool_call_id` | [Formatting results](https://platform.openai.com/docs/guides/function-calling#formatting-results) |
-| 工具选择 | `ToolChoiceMode` → `tool_choice` | [Tool choice](https://platform.openai.com/docs/guides/function-calling#tool-choice) |
-| 严格模式 | `strict_schema()` | [Strict mode](https://platform.openai.com/docs/guides/function-calling#strict-mode) |
+| 工具选择 | `genai::chat::ToolChoice` → `tool_choice` | [Tool choice](https://platform.openai.com/docs/guides/function-calling#tool-choice) |
+| 严格模式 | `genai::chat::sanitize_json_schema`（**适配器代劳**） | [Strict mode](https://platform.openai.com/docs/guides/function-calling#strict-mode) |
 | 并行调用 | 循环遍历 `calls` | [Parallel function calling](https://platform.openai.com/docs/guides/function-calling#parallel-function-calling) |
 | 五步流程 | `agent.rs` 的主循环 | [The tool calling flow](https://platform.openai.com/docs/guides/function-calling#the-tool-calling-flow) |
 
@@ -939,7 +979,10 @@ make test
 | `ChatResponse::reasoning_content` | 推理模型的思考内容（**必须回传**） |
 | `ContentPart::ToolCall` / `ContentPart::ToolResponse` | 消息里的工具调用/回执 |
 | `ContentPart::ReasoningContent` | 思考内容（顺序在工具调用之前） |
-| `Tool::with_strict` | strict 模式标记 |
+| `Tool::with_strict` | strict 模式标记（Schema 消毒由适配器按方言做） |
+| `chat::sanitize_json_schema` | Schema 消毒（`OpenAiStrictTool` / `OpenAiStrict` / `AnthropicStructured` 三种方言） |
+| `chat::Usage` | token 计数（`Option<i32>`，可能为**负** → 需归一化） |
+| `chat::StopReason::is_max_tokens()` | 截断检测 |
 
 ### DeepSeek 实测行为速查
 

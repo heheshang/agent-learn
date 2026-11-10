@@ -107,6 +107,14 @@ graph LR
 工具 trait、LLM trait、Schema 校验器都复用 16 / 14，
 **继承它们踩过的坑**（比如「每个 tool_call 都必须有回执」）。
 
+> ★ **本项目连 assistant 消息的构造也复用 16**
+> （`agent_16::agent::build_assistant_message`）——
+> 本项目原先自己写了一份**不带 `reasoning_content`** 的版本，
+> 思考模式一开就会被 provider 拒（400）。
+> 同理，工具参数规整也复用 `agent_16::agent::normalize_arguments`。
+> ⚠️ **复用 ≠ 自动生效** —— 复用前一个项目的类型只是第一步，
+> **语义字段必须在搬运链上全程保留**。
+
 ---
 
 ## 错误分类：三种处置策略
@@ -223,24 +231,24 @@ delay = min(base_delay × 2^(n-1), max_delay)
 
 ```mermaid
 flowchart TD
-    A["Agent::run<br/>src/agent.rs:230"] --> B["prompt::system_prompt<br/>src/prompt.rs:21"]
-    A --> C["llm.chat_with_tools<br/>src/llm.rs:105"]
+    A["Agent::run<br/>src/agent.rs:231"] --> B["prompt::system_prompt<br/>src/prompt.rs:21"]
+    A --> C["llm.chat_with_tools<br/>src/llm.rs:106"]
     C --> D{"有 tool_calls？"}
-    D -->|没有| E["steps.push 最终答案<br/>src/agent.rs:296"]
-    D -->|有| F["build_assistant_message<br/>src/agent.rs:400"]
-    F --> G["normalize_arguments<br/>src/agent.rs:416"]
+    D -->|没有| E["steps.push 最终答案<br/>src/agent.rs:274"]
+    D -->|有| F["agent_16::agent::build_assistant_message<br/>（复用 16，带 reasoning_content）"]
+    F --> G["normalize_arguments<br/>agent_16::agent（复用 16）"]
     G --> H["middleware.wrap_tool_call<br/>src/middleware.rs:243"]
-    H --> I["ToolCallRecord::from_outcome<br/>src/agent.rs:95"]
-    H --> J["ToolResponse::from_tool_call<br/>src/agent.rs:331"]
-    J --> K["messages.push tool 消息<br/>src/agent.rs:342"]
+    H --> I["ToolCallRecord::from_outcome<br/>src/agent.rs:96"]
+    H --> J["ToolResponse::from_tool_call<br/>src/agent.rs:347"]
+    J --> K["messages.push tool 消息<br/>src/agent.rs:358"]
     K --> L{"有致命错误？"}
-    L -->|是| M["Err AppError<br/>src/agent.rs:361"]
+    L -->|是| M["Err AppError<br/>src/agent.rs:377"]
     L -->|否| A
     E --> N["返回 AgentRun"]
 ```
 
-★ `src/agent.rs:331` —— **回执必须恰好一条**。少一条下一轮请求就 400（16 实测）。
-★ `src/agent.rs:416` —— 参数可能是 **JSON 字符串**而非对象，必须先规整，否则本地校验直接报错。
+★ `src/agent.rs:347` —— **回执必须恰好一条**。少一条下一轮请求就 400（16 实测）。
+★ `agent_16::agent::normalize_arguments` —— 参数可能是 **JSON 字符串**而非对象，必须先规整，否则本地校验直接报错。
 
 ### ② 中间件的决策逻辑
 

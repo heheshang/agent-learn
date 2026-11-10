@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 pub use agent_18::llm::{
     FunctionLlm, FunctionLlmFuture, GenaiFunctionLlm, ScriptedLlm, ScriptedStep, ScriptedToolCall,
-    ToolChoiceMode,
+    ToolChoice, parse_tool_choice, tool_choice_name,
 };
 
 use agent_16::tools::ToolSpec;
@@ -53,7 +53,7 @@ pub async fn generate_text(
             system,
             &[genai::chat::ChatMessage::user(user.to_string())],
             &[],
-            ToolChoiceMode::None,
+            ToolChoice::None,
         )
         .await?;
 
@@ -66,7 +66,7 @@ pub async fn chat_with_tools(
     system: &str,
     messages: &[genai::chat::ChatMessage],
     tools: &[ToolSpec],
-    tool_choice: ToolChoiceMode,
+    tool_choice: ToolChoice,
 ) -> Result<genai::chat::ChatResponse, agent_16::error::AppError> {
     llm.chat_with_tools(system, messages, tools, tool_choice)
         .await
@@ -112,7 +112,7 @@ mod tests {
                 "搜索",
                 json!({ "type": "object" }),
             )],
-            ToolChoiceMode::Auto,
+            ToolChoice::Auto,
         )
         .await
         .unwrap();

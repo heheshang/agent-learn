@@ -30,7 +30,7 @@ use agent_19::api::AppStateInner;
 use agent_19::config::AppConfig;
 use agent_19::error::ErrorCode;
 use agent_19::evidence::{EvidenceCollector, EvidenceKind};
-use agent_19::llm::ToolChoiceMode;
+use agent_19::llm::ToolChoice;
 use agent_19::search::{MockBackend, SearchResult, WebBackend};
 use agent_19::tools::{MemoryTool, default_registry};
 
@@ -105,7 +105,7 @@ fn agent(llm: ScriptedLlm, max_steps: usize) -> Agent {
         middleware(0),
         AgentConfig {
             max_steps,
-            tool_choice: ToolChoiceMode::Auto,
+            tool_choice: ToolChoice::Auto,
         },
     )
 }

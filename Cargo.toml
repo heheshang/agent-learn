@@ -217,9 +217,7 @@ base64 = "0.22"
 #    `spawn` 要求 future 是 `'static`（不借用调用栈上的数据），
 #    而本项目的工具调用要借用 `&ToolRegistry` / `&str` 提示词，
 #    只能靠 `join_all` 这类**就地组合**的并发原语。
-futures = { version = "0.3.34", default-features = false, features = [
-    "std",
-] }
+futures = { version = "0.3.34", default-features = false, features = ["std"] }
 
 # ── 属性测试 / 模糊测试 ───────────────────────────────────────────────
 # proptest：**属性测试**（property-based testing）框架。
@@ -235,6 +233,4 @@ futures = { version = "0.3.34", default-features = false, features = [
 # ⚠️ `default-features = false` + 只开 `std`：
 #   proptest 的 `fork` / `timeout` feature 依赖 `fork` crate（Unix only），
 #   会引入额外的平台耦合；本仓库不需要。
-proptest = { version = "1.12.0", default-features = false, features = [
-    "std",
-] }
+proptest = { version = "1.12.0", default-features = false, features = ["std"] }

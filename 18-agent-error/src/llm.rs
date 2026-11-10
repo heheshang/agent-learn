@@ -26,7 +26,7 @@ use genai::chat::{ChatMessage, ChatResponse};
 
 pub use agent_16::llm::{
     FunctionLlm, FunctionLlmFuture, GenaiFunctionLlm, ScriptedFunctionLlm, ScriptedStep,
-    ScriptedToolCall, ToolChoiceMode,
+    ScriptedToolCall, ToolChoice, parse_tool_choice, tool_choice_name,
 };
 
 use crate::tools::ToolSpec;
@@ -108,7 +108,7 @@ impl FunctionLlm for ScriptedLlm {
         _system: &'a str,
         _messages: &'a [ChatMessage],
         _tools: &'a [ToolSpec],
-        _tool_choice: ToolChoiceMode,
+        _tool_choice: ToolChoice,
     ) -> FunctionLlmFuture<'a> {
         let step = {
             let mut calls = self.calls.lock().expect("calls 锁中毒");
@@ -173,19 +173,19 @@ mod tests {
         let llm = ScriptedLlm::new(vec![step_text("一"), step_text("二")]);
 
         let resp = llm
-            .chat_with_tools("s", &[], &[], ToolChoiceMode::Auto)
+            .chat_with_tools("s", &[], &[], ToolChoice::Auto)
             .await
             .unwrap();
         assert_eq!(resp.first_text(), Some("一"));
 
         let resp = llm
-            .chat_with_tools("s", &[], &[], ToolChoiceMode::Auto)
+            .chat_with_tools("s", &[], &[], ToolChoice::Auto)
             .await
             .unwrap();
         assert_eq!(resp.first_text(), Some("二"));
 
         assert!(
-            llm.chat_with_tools("s", &[], &[], ToolChoiceMode::Auto)
+            llm.chat_with_tools("s", &[], &[], ToolChoice::Auto)
                 .await
                 .is_err()
         );
@@ -199,7 +199,7 @@ mod tests {
         let llm = ScriptedLlm::new(vec![step_failure("连接超时")]);
 
         let err = llm
-            .chat_with_tools("s", &[], &[], ToolChoiceMode::Auto)
+            .chat_with_tools("s", &[], &[], ToolChoice::Auto)
             .await
             .unwrap_err();
 
@@ -215,7 +215,7 @@ mod tests {
         )])]);
 
         let resp = llm
-            .chat_with_tools("s", &[], &[], ToolChoiceMode::Auto)
+            .chat_with_tools("s", &[], &[], ToolChoice::Auto)
             .await
             .unwrap();
 

@@ -102,5 +102,5 @@ pub use agent::{Agent, AgentConfig, AgentRun, StepRecord, ToolCallRecord};
 pub use concurrency::{BatchReport, ExecutionMode, Task, TaskOutput, TaskResult};
 pub use config::AppConfig;
 pub use error::{AppError, AppResult, ErrorCode, ErrorKind, ToolError};
-pub use llm::{FunctionLlm, GenaiFunctionLlm, LlmStep, ScriptedLlm, ToolChoiceMode};
+pub use llm::{FunctionLlm, GenaiFunctionLlm, LlmStep, ScriptedLlm, ToolChoice};
 pub use tools::{AsyncTool, ToolContext};

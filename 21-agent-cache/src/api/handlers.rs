@@ -29,7 +29,7 @@ pub async fn root(State(state): State<AppState>) -> impl IntoResponse {
         "agent": {
             "max_steps": state.config.agent.max_steps,
             "strict_prompt": state.config.prompt.strict,
-            "tool_choice": state.config.prompt.tool_choice.name(),
+            "tool_choice": agent_16::llm::tool_choice_name(&state.config.prompt.tool_choice),
         },
         "model": {
             "name": state.config.model,
