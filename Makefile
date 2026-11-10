@@ -28,6 +28,8 @@ PKGS  := axum-01 rig-02 genai-03 rag-04 rag-05 rag-06 rag-07 rag-08 rag-09 rag-1
         bench-22 bench-real-22 modes-22 \
         milvus-up milvus-down milvus-destroy \
         check-mermaid check-toc \
+        prop prop-08 prop-13 prop-14 prop-15 prop-21 \
+        fuzz-build fuzz-run fuzz-list \
         deps faiss chroma
 
 help: ## 显示本文件的所有目标
@@ -373,6 +375,47 @@ check-mermaid: ## 校验所有 README 的 mermaid 图能正常渲染
 
 check-toc: ## 校验所有 README 的目录锚点链接有效
 	@python3 scripts/check-toc-links.py
+
+## ── 属性测试 / 模糊测试 ───────────────────────────────────────────────
+#
+# 两套机制，**互补**（详见 fuzz/README.md）：
+#
+#   属性测试（proptest）  —— 语义层面的不变量，输入按语义生成
+#   模糊测试（libFuzzer） —— 字节层面的畸形输入，任意字节序列
+#
+# ⚠️ 属性测试跑在**稳定工具链**上（跟主 workspace 一致），
+#    所以可以进 CI；模糊测试需要 **nightly**（libFuzzer 要 `-Z sanitizer`），
+#    是**可选**的深度检查。
+
+prop: ## 跑全部属性测试（proptest，稳定工具链）
+	$(CARGO) test --workspace --test properties
+
+prop-08: ## 跑 08-rag 分词器的属性测试
+	$(CARGO) test -p rag-08 --test properties
+
+prop-13: ## 跑 13-agent-core ReAct 解析器的属性测试
+	$(CARGO) test -p agent-13 --test properties
+
+prop-14: ## 跑 14-agent-tool Schema 校验器的属性测试
+	$(CARGO) test -p agent-14 --test properties
+
+prop-15: ## 跑 15-agent-sql SQL 护栏的属性测试
+	$(CARGO) test -p agent-15 --test properties
+
+prop-21: ## 跑 21-agent-cache 缓存键的属性测试
+	$(CARGO) test -p agent-21 --test properties
+
+fuzz-build: ## 编译全部模糊测试目标（需要 nightly）
+	@cargo +nightly fuzz build
+
+fuzz-run: ## 跑全部模糊测试目标各 30 秒（需要 nightly）
+	@for t in react_parser sql_guard schema_validator cache_key tokenizer; do \
+		echo "==> fuzzing $$t"; \
+		cargo +nightly fuzz run $$t -- -max_total_time=30 || exit 1; \
+	done
+
+fuzz-list: ## 列出全部模糊测试目标
+	@cargo +nightly fuzz list
 
 deps: ## 检查系统依赖
 	@echo "==> FAISS (05/06/07/08/09 需要)"; $(MAKE) -C 05-rag deps

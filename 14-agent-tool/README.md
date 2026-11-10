@@ -674,7 +674,7 @@ curl -s -X POST http://127.0.0.1:3071/mcp \
 ## 测试
 
 ```bash
-make test    # 单元 80 + 集成 29 = 109 项
+make test    # 单元 80 + 集成 29 + 属性 13 = 122 项
 make lint    # clippy 零警告
 ```
 
@@ -684,6 +684,32 @@ Agent 循环是一个**状态机**：每一步的输出决定下一步的输入�
 有了 `ScriptedLlm`，整个循环可以在**零网络、零延迟、完全确定**的条件下被测试。
 
 工具层同理 —— 塞一个 `FakeTool` 进去，不碰网络。
+
+### ⭐ 属性测试：Schema 校验器的不变量
+
+`schema::validate` 的输入是**模型填的工具参数** —— 同样完全不可信。
+
+本项目的硬约束②写得很直白：
+
+> **参数错了别发请求** —— Schema 本地校验，错误信息必须「可执行」
+
+属性测试让随机 JSON 撞不变量：
+
+| 不变量 | 含义 |
+|---|---|
+| `valid_arguments_are_never_rejected` | 合法参数**绝不误伤** |
+| `missing_required_field_is_rejected` | 缺必填字段必被拒 |
+| `wrong_type_is_rejected` | 类型错必被拒 |
+| `unknown_field_is_rejected` | 多余字段必被拒（防模型幻觉参数） |
+| `enum_violation_is_rejected` | 枚举违规必被拒 |
+| `defaults_are_filled` | `default` 值被正确填入 |
+| `error_message_names_the_field` | ⭐ 错误信息**指出哪个参数**（否则模型无法自我纠正） |
+| `validate_never_panics` | 任意参数都不 panic |
+
+⚠️ 「合法参数绝不误伤」这条最容易写错 ——
+它要求生成器产出的 JSON **确实**满足 Schema。
+用 `prop_assume!` 排除「生成器自己造出来的非法情况」，
+否则会把「生成器不对」误报成「校验器有 bug」。
 
 ### 集成测试覆盖的场景
 

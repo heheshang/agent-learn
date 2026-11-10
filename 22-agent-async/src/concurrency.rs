@@ -35,6 +35,16 @@
 //! 「结果可能乱序到达，**每条结果带上输入的下标**用于对账」。
 //! 本项目照做：每条 [`TaskOutput`] 都带 `index`，
 //! 用 [`BatchReport::ordered_results`] 还原输入顺序。
+//!
+//! **④ 并发层是「搬运工」—— 搬运的东西不能缺字段。**
+//!
+//! ⚠️ 本项目最初用 `Result<String, ToolError>` 作为任务输出，
+//! 结果把**重试次数**和**错误类别**丢在了并发层：
+//! - 致命错误（Fatal）被上层当普通错误**降级成观察** → 模型转而编答案
+//! - `retried_calls` **恒为 0**（`attempts` 被写死成 1）
+//!
+//! 所以改成 [`TaskResult`]：带 `observation` + `attempts` + `error`（**原始错误对象**）。
+//! **语义字段必须在搬运链上全程保留。**
 
 use std::future::Future;
 use std::pin::Pin;
@@ -43,10 +53,76 @@ use std::time::{Duration, Instant};
 use futures::stream::{FuturesUnordered, StreamExt};
 use serde::{Deserialize, Serialize};
 
-use crate::error::ToolError;
+use crate::error::{ErrorKind, ToolError};
 
 /// 一个并发任务的 future。
-pub type TaskFuture = Pin<Box<dyn Future<Output = Result<String, ToolError>> + Send>>;
+///
+/// ## ⚠️ 输出类型为什么不是 `Result<String, ToolError>`
+///
+/// 最初写成 `Result<String, ToolError>`，但那会**丢信息**：
+/// 中间件的重试次数（`outcome.attempts`）和「这个错误是不是 Fatal」
+/// 都拿不到 —— 前者导致 `retried_calls` 恒为 0，
+/// 后者导致致命错误被误当成普通错误降级成观察。
+///
+/// 所以改成携带完整信息的 [`TaskResult`]。
+pub type TaskFuture = Pin<Box<dyn Future<Output = TaskResult> + Send>>;
+
+/// 一个任务的执行结果 —— **带尝试次数与错误对象**。
+///
+/// ## 为什么并发层要带这些
+///
+/// 并发层本身不关心「重试」「致命错误」这些语义，
+/// 但它**搬运**结果，所以不能在中途把信息扔掉。
+/// 语义判断留给 Agent 循环（[`crate::agent`]）。
+#[derive(Debug, Clone)]
+pub struct TaskResult {
+    /// 给模型看的观察文本。
+    ///
+    /// 成功时是工具输出，失败时是错误文本（三段式：`[错误码] 原因。建议：…`）。
+    pub observation: String,
+
+    /// 实际尝试次数（含重试）—— 1 = 一次就成。
+    pub attempts: usize,
+
+    /// 最终错误（失败时）。
+    pub error: Option<ToolError>,
+}
+
+impl TaskResult {
+    /// 成功。
+    pub fn ok(observation: impl Into<String>, attempts: usize) -> Self {
+        Self {
+            observation: observation.into(),
+            attempts: attempts.max(1),
+            error: None,
+        }
+    }
+
+    /// 失败（带错误对象 —— **类别不能丢**）。
+    pub fn failed(observation: impl Into<String>, attempts: usize, error: ToolError) -> Self {
+        Self {
+            observation: observation.into(),
+            attempts: attempts.max(1),
+            error: Some(error),
+        }
+    }
+
+    /// 是否成功。
+    pub fn is_ok(&self) -> bool {
+        self.error.is_none()
+    }
+
+    /// ⚠️ 这个错误是不是**致命**的。
+    ///
+    /// Fatal 错误**不能**降级成观察（18 的结论）——
+    /// 降级会让模型以为「工具坏了」转而编答案，
+    /// 把配置问题掩盖成幻觉。
+    pub fn is_fatal(&self) -> bool {
+        self.error
+            .as_ref()
+            .is_some_and(|e| e.kind == ErrorKind::Fatal)
+    }
+}
 
 /// 一个并发任务。
 ///
@@ -71,7 +147,7 @@ impl Task {
     /// 构造一个任务。
     pub fn new<F>(name: impl Into<String>, index: usize, fut: F) -> Self
     where
-        F: Future<Output = Result<String, ToolError>> + Send + 'static,
+        F: Future<Output = TaskResult> + Send + 'static,
     {
         Self {
             name: name.into(),
@@ -90,8 +166,8 @@ pub struct TaskOutput {
     /// 任务名。
     pub name: String,
 
-    /// 结果：观察文本 / 错误。
-    pub result: Result<String, ToolError>,
+    /// 结果（带观察文本、尝试次数与错误对象）。
+    pub result: TaskResult,
 
     /// 这个任务自己花了多久。
     pub elapsed: Duration,
@@ -178,7 +254,14 @@ impl BatchReport {
 
     /// 失败的任务数。
     pub fn failure_count(&self) -> usize {
-        self.results.iter().filter(|r| r.result.is_err()).count()
+        self.results.iter().filter(|r| !r.result.is_ok()).count()
+    }
+
+    /// ⚠️ 致命错误的任务数。
+    ///
+    /// Fatal 错误**不能**降级 —— 见到它就必须终止。
+    pub fn fatal_count(&self) -> usize {
+        self.results.iter().filter(|r| r.result.is_fatal()).count()
     }
 
     /// 最慢的那个任务。
@@ -369,7 +452,7 @@ mod tests {
         let name = name.to_string();
         Task::new(name.clone(), index, async move {
             tokio::time::sleep(Duration::from_millis(ms)).await;
-            Ok(format!("{name} 完成"))
+            TaskResult::ok(format!("{name} 完成"), 1)
         })
     }
 
@@ -398,11 +481,11 @@ mod tests {
         let tasks = vec![
             Task::new("slow", 0, async {
                 tokio::time::sleep(Duration::from_millis(80)).await;
-                Ok("slow".to_string())
+                TaskResult::ok("slow", 1)
             }),
             Task::new("fast", 1, async {
                 tokio::time::sleep(Duration::from_millis(10)).await;
-                Ok("fast".to_string())
+                TaskResult::ok("fast", 1)
             }),
         ];
 
@@ -421,11 +504,11 @@ mod tests {
         let tasks = vec![
             Task::new("slow", 0, async {
                 tokio::time::sleep(Duration::from_millis(80)).await;
-                Ok("slow".to_string())
+                TaskResult::ok("slow", 1)
             }),
             Task::new("fast", 1, async {
                 tokio::time::sleep(Duration::from_millis(10)).await;
-                Ok("fast".to_string())
+                TaskResult::ok("fast", 1)
             }),
         ];
 
@@ -459,7 +542,7 @@ mod tests {
                     peak.fetch_max(now, Ordering::SeqCst);
                     tokio::time::sleep(Duration::from_millis(40)).await;
                     counter.fetch_sub(1, Ordering::SeqCst);
-                    Ok("ok".to_string())
+                    TaskResult::ok("ok", 1)
                 })
             })
             .collect();
@@ -490,9 +573,10 @@ mod tests {
     #[tokio::test]
     async fn failures_are_kept_per_task() {
         let tasks = vec![
-            Task::new("ok", 0, async { Ok("成功".to_string()) }),
+            Task::new("ok", 0, async { TaskResult::ok("成功", 1) }),
             Task::new("bad", 1, async {
-                Err(ToolError::internal("bad", "炸了"))
+                let err = ToolError::internal("bad", "炸了");
+                TaskResult::failed(err.to_string(), 1, err)
             }),
         ];
 
@@ -500,6 +584,39 @@ mod tests {
 
         assert_eq!(report.success_count(), 1);
         assert_eq!(report.failure_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn fatal_errors_are_recognized() {
+        // ⚠️ Fatal 必须能被识别出来 —— Agent 循环靠它终止，
+        //    识别不了就等于「致命错误被降级成观察」。
+        let tasks = vec![
+            Task::new("fatal", 0, async {
+                let err = ToolError::unauthorized("fatal", "没配 key");
+                TaskResult::failed(err.to_string(), 1, err)
+            }),
+            Task::new("business", 1, async {
+                let err = ToolError::invalid_args("business", "参数不对");
+                TaskResult::failed(err.to_string(), 1, err)
+            }),
+        ];
+
+        let report = run(ExecutionMode::JoinAll, tasks).await;
+
+        assert_eq!(report.fatal_count(), 1);
+        assert!(report.results[0].result.is_fatal());
+        assert!(!report.results[1].result.is_fatal());
+    }
+
+    #[tokio::test]
+    async fn attempts_are_preserved_through_the_concurrency_layer() {
+        // ⚠️ 尝试次数必须在并发层**原样搬运** ——
+        //    丢了它上层就统计不出「重试了几次」。
+        let tasks = vec![Task::new("t", 0, async { TaskResult::ok("ok", 3) })];
+
+        let report = run(ExecutionMode::JoinAll, tasks).await;
+
+        assert_eq!(report.results[0].result.attempts, 3);
     }
 
     #[tokio::test]

@@ -990,6 +990,94 @@ cargo test --workspace
 cd 08-rag && make help
 ```
 
+## 测试体系：单元测试 + 属性测试 + 模糊测试
+
+仓库用**三层**测试，对应三个不同的问题：
+
+| 层 | 工具 | 问的问题 | 工具链 |
+|---|---|---|---|
+| **单元 / 集成测试** | `cargo test` | 「我想到的输入对不对？」 | 稳定版 |
+| **属性测试** | [proptest](https://proptest-rs.github.io/proptest/) | 「**任意**输入都满足性质 P 吗？」 | 稳定版 |
+| **模糊测试** | [libFuzzer](https://rust-fuzz.github.io/book/)（cargo-fuzz） | 「**任意字节**会不会 panic / 绕过？」 | nightly |
+
+### 为什么要加后两层
+
+仓库里有大量模块的输入是**完全不可信**的：
+
+- 13 的 ReAct 解析器 —— 输入是**模型的原始输出**
+- 14 的 Schema 校验器 —— 输入是**模型填的工具参数**
+- 15 的 SQL 护栏 —— 输入是**模型生成的 SQL**（安全关键）
+- 21 的缓存键 —— 输入是**整段对话历史**
+- 08 的分词器 —— 被上面所有模块**复用**，一处切错全链路塌方
+
+这些模块的单元测试有个共同的结构性盲区：**只能覆盖「人想得到的」输入**。
+而「漏掉一个分支」这件事本身无法被「逐个分支写测试」发现 ——
+因为没写的那个测试根本不存在。
+
+属性测试换了个思路：**不测具体输入，只写不变量**，让框架随机生成输入去撞。
+
+### 五个被测目标
+
+| 目标 | 被测模块 | 重点不变量 |
+|---|---|---|
+| `08-rag` | `rag_08::tokenize` | 词元非空、拉丁全小写、bigram 保留词序 |
+| `13-agent-core` | `agent_13::agent` | 任意输出不 panic、最后一个标记优先、参数永远是对象 |
+| `14-agent-tool` | `agent_14::schema` | 合法参数不误伤、非法参数不漏放、错误信息可执行 |
+| `15-agent-sql` | `agent_15::guard` | **危险关键字裸词必被拦**、字符串/注释里的关键字不误伤 |
+| `21-agent-cache` | `agent_21::cache::key` | **任一字段变化必 miss**、键稳定、键形态合法 |
+
+### 怎么跑
+
+```bash
+make prop             # 跑全部属性测试（稳定工具链，能进 CI）
+make prop-13          # 只跑某个项目
+make prop-15
+
+make fuzz-build       # 编译全部模糊测试目标（需要 nightly）
+make fuzz-run         # 每个目标跑 30 秒
+make fuzz-list        # 列出目标
+```
+
+⚠️ 模糊测试需要先准备工具链：
+
+```bash
+cargo install cargo-fuzz --locked
+rustup toolchain install nightly
+```
+
+`fuzz/` 是**独立 workspace**（自己的 `[workspace]` 空节）——
+因为 libFuzzer 需要 nightly 的 `-Z sanitizer`，而主仓库固定在稳定版 1.99.1。
+详见 [`fuzz/README.md`](fuzz/README.md)。
+
+### ⚠️ 这套测试立刻抓到了两个真 bug
+
+**① 13 的 ReAct 解析器会 panic（Unicode 小写化导致偏移错位）**
+
+`find_last_marker` 曾是：
+
+```rust
+let lower = text.to_lowercase();
+lower.rfind(&marker.to_lowercase())
+```
+
+Unicode 小写化**不保证字节长度不变** —— `İ`（U+0130）小写化成 `i` + 组合字符（2 字节 → 3 字节）。
+于是 `lower` 的偏移量比 `text` 大，用它切 `text` 直接越界：
+
+```text
+text = "İİİAction: x"  →  lower.rfind("action:") = 9
+text[9 + 7..]  →  start byte index 16 is out of bounds for string of length 15
+```
+
+修法：**在原串的字符边界上做 ASCII 大小写比较**（不用 `to_lowercase()` + `rfind` 这个组合）。
+
+**② 工具名没做「标识符截断」**
+
+`Action:Thought:Thought:` 曾被解析出工具名 `Thought:Thought` ——
+一个**永远匹配不上任何工具**的名字。
+修法：「取开头那段连续的字母/数字/下划线」。
+
+⚠️ 回归种子记在 `*/tests/properties.proptest-regressions`（**已入库**），防止 bug 复发。
+
 ## 依赖版本管理
 
 所有成员 crate 的依赖版本在根 `Cargo.toml` 的 `[workspace.dependencies]` 里统一定义，

@@ -20,7 +20,7 @@
 - [流程图](#流程图)
 - [时序图](#时序图)
 - [知识地图](#知识地图)
-- [核心产出：四个实测踩出来的坑](#核心产出四个实测踩出来的坑)
+- [核心产出：六个实测踩出来的坑](#核心产出六个实测踩出来的坑)
 - [代码调用详细流程图（函数级）](#代码调用详细流程图函数级)
 - [HTTP 接口](#http-接口)
 - [环境变量](#环境变量)
@@ -34,6 +34,11 @@
 >
 > 本项目把这一步从「串行 for 循环」改成「限流并发」，并用**可复现的对照实验**证明：
 > 模拟 I/O 负载下 **4.08x**，真实天气接口下最高 **4.20x**。
+>
+> ⚠️ 但「并发」本身不是全部 —— **并发层的任务结果类型决定了上层能不能做对决策**：
+> 用「够用的最小类型」（`Result<String, ToolError>`）会丢掉
+> 「重试次数」和「错误类别」，导致致命错误被降级成观察（坑 5）、
+> 重试统计恒为 0（坑 6）。**语义字段必须在搬运链上全程保留。**
 
 ---
 
@@ -88,6 +93,10 @@ graph LR
 | [`agent_16`] | `ToolSpec`、参数规整 | 「Schema 是对模型的承诺」 |
 | [`agent_14`] | 天气工具（真 HTTP）+ Schema 校验器 | 「参数错了别发请求」 |
 | [`agent_13`] | 算术求值器 | 「精确数字不走模型心算」 |
+
+⚠️ **「继承」不等于「自动生效」** —— 本项目曾**声称**继承了 18 的「Fatal 不降级」，
+但因为并发层把错误类别丢在了半路，这条其实**没生效**（坑 5）。
+**复用类型只是第一步，还要保证语义字段在搬运链上全程保留。**
 
 > ⚠️ **不重写 Function Calling** —— 16 修过的坑（回执缺失 400、`reasoning_content` 回传、`tool_choice` 四档消融）自动继承。
 
@@ -371,7 +380,7 @@ graph LR
 
 ---
 
-## 核心产出：四个实测踩出来的坑
+## 核心产出：六个实测踩出来的坑
 
 ### 坑 1：并发执行后结果乱序，回执跟着乱
 
@@ -386,6 +395,12 @@ graph LR
 
 **回归测试**：`parallel_tool_calls_keep_input_order_in_receipts`
 （故意让第二个工具先完成，如果实现退化成「按完成顺序排」，顺序就会乱）。
+
+⚠️ **真实网络下已被验证**：实测两个 `get_weather` 并发跑，
+日志里的完成顺序是「上海 → 北京」（与输入顺序相反），
+但终端打印的回执顺序仍是「北京 → 上海」——
+说明「按 `index` 还原」这段逻辑在**真实模型 + 真实网络**下同样成立，
+不是只在单测里成立。
 
 ### 坑 2：同步阻塞的工具塞进 `async` → 整个事件循环卡住
 
@@ -406,7 +421,7 @@ graph LR
 **为什么**：`buffer_unordered(0)` 的内部信号量永远不会释放令牌，
 stream 一次都不 poll。
 
-**修法**：**两道防线** ——
+**修法**：**三道防线** ——
 1. 配置层 `max_concurrency.clamp(1, 64)`
 2. 执行层 `ExecutionMode::Bounded(limit)` → `limit.max(1)`
 3. API 层的 `to_execution_mode` 也 clamp 一次
@@ -427,6 +442,61 @@ stream 一次都不 poll。
 **修法**：本项目把工具分成**三条轨道**（异步 / 线程池 / CPU），
 并在提示词与 README 里说清「并发 ≠ 并行」。
 
+### 坑 5：致命错误被降级成观察（**自测时发现**）
+
+⚠️ **这是「继承 18 的坑」时漏掉的一处** ——
+本项目 README 一直写着「继承 18 的『Fatal 不降级』」，
+但代码里其实**根本没实现**。
+
+**现象**：中间件把 Fatal 错误（鉴权失败 / 内部缺陷）降级成了观察文本，
+Agent 循环把它当普通错误喂回模型。
+
+**为什么致命**：18 明确警告过 —— 降级后模型会以为「工具坏了」，
+于是转而**编一个答案**，把配置问题（没配 key）掩盖成**幻觉**。
+真实可达路径：`translate_tool_error`（`tools.rs`）把 14 的 `Execution` 错误
+映射成 `ToolError::internal` → `kind = Fatal`。
+
+**根因**：`run_one` 的返回类型是 `Result<String, ToolError>`，
+**只带观察文本**，把错误的 `kind`（Fatal / Business / Transient）**丢在了并发层**。
+上层拿到的是一段字符串，没法判断「该不该终止」。
+
+**修法**：并发层的任务结果换成 [`TaskResult`](src/concurrency.rs) ——
+带 `observation` + `attempts` + `error`（**原始错误对象**）。
+Agent 循环据此判断：
+
+```text
+Fatal → 终止循环，返回 500（不返回模型的答案）
+Business / Transient → 降级成观察，喂回模型
+```
+
+⚠️ **终止发生在回执生成之后** —— 16 的坑 1 优先级更高：
+少一条回执整个请求就 400，**包括致命错误这一条**。
+
+⚠️ **并发下的终止不能「取消」别的任务** —— 两个任务是同时跑的，
+终止只是「不再等结果」，已经跑起来的那个**照样跑完**。
+
+**回归测试**：`fatal_tool_error_terminates_the_agent_loop`（Fatal → 500）、
+`fatal_tool_error_still_produces_one_receipt_per_call_id`（另一个并发调用照样执行）、
+`business_tool_error_is_still_degraded_into_an_observation`（**对照组** ——
+Business 仍必须降级，否则就变成「所有错误都终止」）。
+
+### 坑 6：重试次数被写死成 1（**自测时发现**）
+
+**现象**：终端永远显示「1 次尝试」，`retried_calls` **恒为 0**。
+
+**根因**：同坑 5 —— `run_one` 返回 `Result<String, ToolError>`，
+中间件的真实重试次数在 `outcome.attempts` 里，**被丢掉了**。
+`execute_calls_concurrently` 里写死 `attempts: 1`。
+
+**后果**：`tool_calls`（本意是「实际调用次数」）也永远是「逻辑调用数」，
+重试根本没被计入统计 —— 可观测性直接失真。
+
+**修法**：`TaskResult` 带 `attempts`，一路原样搬运到
+`ToolCallRecord.attempts` / `.retried`。
+
+**回归测试**：`retried_calls_are_counted_and_recorded`（Transient 重试 2 次 → `attempts == 3`）、
+`successful_call_reports_one_attempt`（对照组 —— 没重试仍是 1 次）。
+
 ### 附带的一条：并发任务要求 `'static`
 
 `Task` 里装的是 future，并发原语（`join_all` / `FuturesUnordered` / `buffer_unordered`）
@@ -438,6 +508,21 @@ stream 一次都不 poll。
 - ⚠️ `tokio::spawn` 也要求 `'static`，但它会**夺走所有权**；
   本项目的工具调用要借用 `&str` 提示词，所以只能用**就地组合**的并发原语。
 
+### 附带的一条：「结果类型」不是随便选的
+
+⚠️ 坑 5 与坑 6 是**同一个根因**的两面：
+**并发层是「搬运工」，它搬运的东西里不能缺字段**。
+
+本项目最初用 `Result<String, ToolError>` 作为任务输出，
+看起来「够用」——但它只保留了「文本 + 错误」，
+把「重试次数」和「错误类别」丢在了半路。
+
+**教训**：当并发层要搬运一个**有语义的对象**时，
+不要用「够用的最小类型」——
+**语义字段必须在搬运链上全程保留**，
+否则上层要么统计不到，要么判断不了。
+
+
 ---
 
 ## 代码调用详细流程图（函数级）
@@ -448,30 +533,35 @@ stream 一次都不 poll。
 
 ```mermaid
 graph TD
-    A["Agent.run<br/>agent.rs:214"] --> B["llm.chat_with_tools<br/>agent.rs:239"]
-    B --> C{"calls.is_empty()<br/>agent.rs:246"}
-    C -->|是| D["返回最终答案<br/>agent.rs:250"]
-    C -->|否| E["build_assistant_message<br/>agent.rs:278"]
-    E --> F["execute_calls_concurrently<br/>agent.rs:280"]
+    A["Agent.run<br/>agent.rs:240"] --> B["llm.chat_with_tools<br/>agent.rs:250"]
+    B --> C{"calls.is_empty()<br/>agent.rs:258"}
+    C -->|是| D["返回最终答案<br/>agent.rs:262"]
+    C -->|否| E["build_assistant_message<br/>agent.rs:304"]
+    E --> F["execute_calls_concurrently<br/>agent.rs:307"]
 
-    F --> G["build_tasks<br/>agent.rs:419"]
-    G --> H["run Bounded n<br/>concurrency.rs:211"]
-    H --> I["run_one<br/>agent.rs:455"]
+    F --> G["build_tasks<br/>agent.rs:486"]
+    G --> H["run Bounded n<br/>concurrency.rs:284"]
+    H --> I["run_one<br/>agent.rs:523"]
 
     I --> J["middleware.wrap_tool_call<br/>18-agent-error/src/middleware.rs:243"]
     J --> K{"错误类别<br/>18-agent-error/src/middleware.rs:269"}
     K -->|Transient 且有次数| L["backoff + sleep<br/>18-agent-error/src/middleware.rs:297"]
     L --> J
     K -->|Business / 耗尽| M["降级成观察<br/>18-agent-error/src/middleware.rs:321"]
+    K -->|Fatal| M2["★ 不降级<br/>18-agent-error/src/middleware.rs:283"]
     K -->|无错| N["成功<br/>18-agent-error/src/middleware.rs:263"]
 
-    M & N --> O["收集结果 带 index<br/>agent.rs:370"]
-    O --> P["★ 按 index 还原顺序<br/>agent.rs:389"]
-    P --> Q["★ 生成回执 一一对应<br/>agent.rs:300"]
-    Q --> B
+    M & M2 & N --> O["收集结果 带 index<br/>agent.rs:431"]
+    O --> P["★ 按 index 还原顺序<br/>agent.rs:430"]
+    P --> Q["★ 生成回执 一一对应<br/>agent.rs:328"]
+    Q --> R{"★ 有 Fatal?<br/>agent.rs:349"}
+    R -->|是| S["终止循环 返回 500<br/>agent.rs:369"]
+    R -->|否| B
 
     style P fill:#ffcdd2
     style Q fill:#ffcdd2
+    style M2 fill:#ffcdd2
+    style S fill:#ffcdd2
     style H fill:#fff3e0
 ```
 
@@ -479,14 +569,14 @@ graph TD
 
 ```mermaid
 graph TD
-    A["run mode tasks<br/>concurrency.rs:211"] --> B{"mode"}
-    B -->|Sequential| C["for 循环逐个 await<br/>concurrency.rs:215"]
-    B -->|JoinAll| D["★ join_all 保序<br/>concurrency.rs:233"]
-    B -->|AsCompleted| E["★ FuturesUnordered 乱序<br/>concurrency.rs:254"]
-    B -->|Bounded n| F["★ buffer_unordered n<br/>concurrency.rs:280"]
+    A["run mode tasks<br/>concurrency.rs:284"] --> B{"mode"}
+    B -->|Sequential| C["for 循环逐个 await<br/>concurrency.rs:288"]
+    B -->|JoinAll| D["★ join_all 保序<br/>concurrency.rs:306"]
+    B -->|AsCompleted| E["★ FuturesUnordered 乱序<br/>concurrency.rs:327"]
+    B -->|Bounded n| F["★ buffer_unordered n<br/>concurrency.rs:353"]
 
-    C & D & E & F --> G["BatchReport<br/>concurrency.rs:311"]
-    G --> H["ordered_results 按 index 排序<br/>concurrency.rs:168"]
+    C & D & E & F --> G["BatchReport<br/>concurrency.rs:384"]
+    G --> H["ordered_results 按 index 排序<br/>concurrency.rs:234"]
 
     style D fill:#e1f5fe
     style E fill:#fff3e0
@@ -498,13 +588,13 @@ graph TD
 ```mermaid
 graph TD
     A["AsyncTool.call<br/>tools.rs:70"] --> B{"工具类型"}
-    B -->|get_weather| C["★ 异步轨道<br/>tools.rs:200"]
-    B -->|calculate| D["CPU 轨道<br/>tools.rs:288"]
-    B -->|slow_report| E["★ 线程池轨道<br/>tools.rs:370"]
+    B -->|get_weather| C["★ 异步轨道<br/>tools.rs:211"]
+    B -->|calculate| D["CPU 轨道<br/>tools.rs:300"]
+    B -->|slow_report| E["★ 线程池轨道<br/>tools.rs:390"]
 
     C --> F["tokio::time::timeout<br/>tools.rs:226"]
-    F --> G["agent_14 WeatherTool<br/>tools.rs:211"]
-    D --> H["agent_13 calculate<br/>tools.rs:299"]
+    F --> G["agent_14 WeatherTool<br/>tools.rs:215"]
+    D --> H["agent_13 calculate<br/>tools.rs:311"]
     E --> I["★ spawn_blocking<br/>tools.rs:404"]
     I --> J["std::thread::sleep<br/>tools.rs:405"]
 
@@ -614,9 +704,9 @@ curl -s -X POST http://127.0.0.1:3140/api/run \
 
 | 类别 | 数量 |
 |---|---|
-| 单元测试 | 40 |
-| 集成测试 | 16 |
-| **合计** | **56** |
+| 单元测试 | 42 |
+| 集成测试 | 21 |
+| **合计** | **63** |
 
 核心回归测试：
 
@@ -631,6 +721,13 @@ curl -s -X POST http://127.0.0.1:3140/api/run \
 | `bounded_with_zero_limit_does_not_hang` | ★ `Bounded(0)` 不挂住 |
 | `join_all_preserves_input_order` | `join_all` 保序 |
 | `as_completed_returns_in_completion_order` | `FuturesUnordered` 乱序 |
+| `fatal_tool_error_terminates_the_agent_loop` | ★ **Fatal 不降级** → 终止 + 500（坑 5） |
+| `fatal_tool_error_still_produces_one_receipt_per_call_id` | ★ 致命错误也**必须**产回执（16 的坑 1 优先） |
+| `business_tool_error_is_still_degraded_into_an_observation` | ★ **对照组**：Business 仍必须降级（坑 5） |
+| `retried_calls_are_counted_and_recorded` | ★ 重试次数不被丢（坑 6） |
+| `successful_call_reports_one_attempt` | ★ **对照组**：没重试仍是 1 次（坑 6） |
+| `attempts_are_preserved_through_the_concurrency_layer` | 并发层原样搬运 `attempts` |
+| `fatal_errors_are_recognized` | 并发层能识别 Fatal |
 
 ### 常用命令
 
@@ -644,7 +741,7 @@ make bench         # ★ 并发对照实验（模拟负载）
 make bench-real    # ★ 并发对照实验（真实天气接口）
 make run           # 跑一次 Agent
 make serve         # 启动 HTTP 服务（:3140）
-make test          # 56 项测试
+make test          # 63 项测试
 make lint          # clippy 零警告
 make check         # fmt + lint + test
 ```

@@ -171,13 +171,25 @@ pub fn parse_react_output(text: &str) -> ParsedOutput {
     if let Some(pos) = find_last_marker(trimmed, "Action:") {
         let rest = &trimmed[pos + "Action:".len()..];
 
-        // 工具名 = `Action:` 后面的第一个非空 token（到行尾或空白为止）。
+        // 工具名 = `Action:` 后面的第一个 token 的**前导标识符部分**。
+        //
+        // ⚠️ 为什么是「前导标识符部分」而不是「整个 token 削掉首尾非标识符字符」：
+        //
+        // 削首尾的做法会漏掉中间的垃圾，例如
+        // `Action:Thought:Thought:` 会得到工具名 `Thought:Thought`
+        // —— 一个**永远不匹配任何工具**的名字。
+        // 模型的真实输出里出现这种形态并不罕见（回显 + 紧接着自己的动作）。
+        //
+        // 工具名按约定就是标识符（`search` / `get_weather` / `sql_db_query`），
+        // 所以正确做法是「取开头那段连续的字母/数字/下划线」，
+        // 剩下的部分整个丢掉。
         let tool = rest
             .split_whitespace()
             .next()
             .unwrap_or("")
-            .trim_matches(|c: char| !c.is_alphanumeric() && c != '_')
-            .to_string();
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect::<String>();
 
         if !tool.is_empty() {
             // `Action Input:` 必须在 `Action:` **之后** ——
@@ -217,9 +229,47 @@ pub fn parse_react_output(text: &str) -> ParsedOutput {
 /// 找出标记**最后一次**出现的位置（忽略大小写）。
 ///
 /// ⚠️ 必须是最后一个 —— 理由见 [`parse_react_output`] 的文档。
+///
+/// ## ⚠️ 为什么不能用 `to_lowercase()` + `rfind`
+///
+/// 曾经的实现是：
+///
+/// ```text
+/// let lower = text.to_lowercase();
+/// lower.rfind(&marker.to_lowercase())
+/// ```
+///
+/// 它有一个**隐蔽的 panic**：Unicode 小写化**不保证字节长度不变**。
+/// 例如 `İ`（U+0130，土耳其大写点 I）小写化成 `i` + 组合字符（2 字节 → 3 字节），
+/// 于是 `lower` 的字节偏移**大于** `text` 的对应偏移。
+/// 用 `lower` 的偏移去切 `text` 就会越界 panic：
+///
+/// ```text
+/// text = "İİİAction: x"  →  lower.rfind("action:") = 9
+/// text[9 + 7..] → start byte index 16 is out of bounds for string of length 15
+/// ```
+///
+/// 模型输出是**完全不可信**的输入，所以这条路径必须能承受任意 Unicode。
+///
+/// ## 现在的做法
+///
+/// 标记全是 ASCII（`Final Answer:` / `Action:` / `Action Input:` / `Thought:`），
+/// 而 ASCII 的大小写折叠**保持字节长度**。
+/// 所以直接在**原串的字符边界**上做「不区分 ASCII 大小写」的比较即可 ——
+/// 既避免了偏移错位，也不需要额外分配一个小写副本。
 fn find_last_marker(text: &str, marker: &str) -> Option<usize> {
-    let lower = text.to_lowercase();
-    lower.rfind(&marker.to_lowercase())
+    let needle = marker.as_bytes();
+    if needle.is_empty() {
+        return None;
+    }
+
+    // 从后往前扫，只在**字符边界**上尝试匹配
+    // （`char_indices().rev()` 保证不会切在 UTF-8 多字节字符中间）。
+    text.char_indices().rev().find_map(|(idx, _)| {
+        let end = idx + needle.len();
+        let slice = text.get(idx..end)?;
+        slice.eq_ignore_ascii_case(marker).then_some(idx)
+    })
 }
 
 /// 抽取 `Thought:` 段落。

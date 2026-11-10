@@ -632,6 +632,7 @@ cargo test -p agent-13
 |---|---|---|
 | 单元测试（lib） | 52 | 提示词组装、解析器、工具、算术求值器、配置 |
 | 集成测试 | 15 | 完整 ReAct 循环（用假 LLM，零网络） |
+| **属性测试（proptest）** | **10** | **解析器的不变量（任意输入不 panic）** |
 
 ### 为什么 Agent 循环可以离线测
 
@@ -640,6 +641,57 @@ Agent 循环是一个**状态机**：每一步的输出决定下一步的输入�
 而且**测不了边界**（比如「模型连调 6 次工具」这条路径，靠真实模型根本触发不了）。
 
 有了 `ScriptedLlm`，这些全部变成确定性的单元测试。
+
+### ⭐ 属性测试：解析器的不变量
+
+`parse_react_output` 的输入是**模型的原始输出** —— 这是整个仓库里**最不可信的一段文本**
+（模型可能回显整个提示词、可能输出任意 Unicode、可能给出格式完全错误的 JSON）。
+
+单元测试只能覆盖「人想得到的」输入。属性测试（`tests/properties.rs`）让**随机输入**
+去撞不变量，失败时自动收缩成最小反例：
+
+| 不变量 | 含义 |
+|---|---|
+| `never_panics` | 任意输入都不 panic（**最重要的那条**） |
+| `final_answer_wins` | 有 `Final Answer:` 时一定解析成最终答案 |
+| `action_tool_name_is_sane` | 工具名是纯标识符 |
+| `action_args_are_always_an_object` | 参数永远是 JSON 对象 |
+| `last_marker_wins` | 多个标记时取**最后一个** |
+| `action_without_tool_name_falls_back_to_unstructured` | 没有工具名时回退成 `Unstructured` |
+
+```bash
+cargo test -p agent-13 --test properties
+```
+
+#### ⚠️ 它真的抓到过两个 bug
+
+**坑 A：Unicode 小写化导致越界 panic**
+
+`find_last_marker` 曾是：
+
+```rust
+let lower = text.to_lowercase();
+lower.rfind(&marker.to_lowercase())
+```
+
+Unicode 小写化**不保证字节长度不变** —— `İ`（U+0130）小写化成 `i` + 组合字符（2 字节 → 3 字节）。
+于是 `lower` 的偏移量比 `text` 大，用它切 `text` 直接越界：
+
+```text
+text = "İİİAction: x"  →  lower.rfind("action:") = 9
+text[9 + 7..]  →  start byte index 16 is out of bounds for string of length 15
+```
+
+修法：**在原串的字符边界上做 ASCII 大小写比较**（`char_indices().rev()` + `eq_ignore_ascii_case`）。
+⚠️ 关键教训：**不要把 `to_lowercase()` 和 `rfind` 配对使用** —— 前者可能改变字节长度。
+
+**坑 B：工具名没做「标识符截断」**
+
+`Action:Thought:Thought:` 曾被解析出工具名 `Thought:Thought` ——
+一个**永远匹配不上任何工具**的名字（`trim_matches` 只削首尾，内部冒号留着）。
+修法：「取开头那段连续的字母/数字/下划线」。
+
+⚠️ 回归种子记在 `tests/properties.proptest-regressions`（**已入库**），每次跑都会先重放这些反例。
 
 ### 集成测试覆盖的场景
 

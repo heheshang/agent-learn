@@ -1,0 +1,75 @@
+[package]
+name = "agent-learn-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+# ⚠️ 这一行是**必须的** ——
+# 没有它，cargo 会认为 fuzz 目录属于上层 workspace，
+# 而上层 workspace 的 members 是显式枚举的（不含 fuzz），
+# 于是 cargo 报错「package is a member of the wrong workspace」。
+#
+# fuzz 必须是一个**独立的 workspace**：
+# 它要用 nightly 编译（libFuzzer 需要 `-Z sanitizer`），
+# 而主 workspace 固定在稳定版 1.99.1。
+[workspace]
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+# ── 被测目标 ─────────────────────────────────────────────────────────
+# 依赖的是**主 workspace 的路径依赖**（不是 crates.io 版本），
+# 所以 fuzz 测的就是仓库里真实的代码。
+agent-13 = { path = "../13-agent-core" }
+agent-14 = { path = "../14-agent-tool" }
+agent-15 = { path = "../15-agent-sql" }
+agent-21 = { path = "../21-agent-cache" }
+rag-08 = { path = "../08-rag" }
+
+# genai：构造 `ChatMessage` / `ToolResponse` 等消息类型。
+#
+# ⚠️ 必须与主 workspace 用**同一个包** ——
+# 主 workspace 用的是 AgentPrism fork（crates.io 上叫 `genai-agentprism`，
+# lib 名仍是 `genai`）。用别家实现会导致类型不互通。
+genai = { version = "=0.7.0-beta.19.1-agentprism", package = "genai-agentprism" }
+
+# fuzz 目标需要 `serde_json`（构造任意 JSON 输入）。
+serde_json = "1"
+
+[[bin]]
+name = "react_parser"
+path = "fuzz_targets/react_parser.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sql_guard"
+path = "fuzz_targets/sql_guard.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "schema_validator"
+path = "fuzz_targets/schema_validator.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "cache_key"
+path = "fuzz_targets/cache_key.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "tokenizer"
+path = "fuzz_targets/tokenizer.rs"
+test = false
+doc = false
+bench = false

@@ -43,7 +43,7 @@ pub struct RunResponse {
     /// 每一步的记录。
     pub steps: Vec<StepRecord>,
 
-    /// 工具调用总次数。
+    /// 工具调用总次数（**含**重试）。
     pub tool_calls: usize,
 
     /// 逻辑上的工具调用组数（同一轮的并行调用算 1 组）。
@@ -52,8 +52,17 @@ pub struct RunResponse {
     /// 用到的工具名。
     pub tools_used: Vec<String>,
 
+    /// 被重试过的调用次数。
+    pub retried_calls: usize,
+
+    /// 降级成观察的错误数。
+    pub degraded_errors: usize,
+
     /// 是否达到步数上限。
     pub hit_max_steps: bool,
+
+    /// 是否因为**致命错误**而终止。
+    pub fatal_terminated: bool,
 
     /// 总耗时（毫秒）。
     pub elapsed_ms: u64,
@@ -71,7 +80,10 @@ impl RunResponse {
             tool_calls: run.tool_calls,
             tool_call_groups: run.tool_call_groups,
             tools_used: run.tools_used,
+            retried_calls: run.retried_calls,
+            degraded_errors: run.degraded_errors,
             hit_max_steps: run.hit_max_steps,
+            fatal_terminated: run.fatal_terminated,
             elapsed_ms: run.elapsed_ms,
             model: run.model,
         }

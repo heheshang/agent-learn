@@ -42,8 +42,8 @@
 
 use std::time::Duration;
 
-use crate::concurrency::{BatchReport, ExecutionMode, Task, TaskFactory};
-use crate::error::{AppError, AppResult, ToolError};
+use crate::concurrency::{BatchReport, ExecutionMode, Task, TaskFactory, TaskResult};
+use crate::error::{AppError, AppResult};
 use crate::tools::AsyncTool;
 
 /// 模拟 I/O 等待的时长（毫秒）。
@@ -67,7 +67,7 @@ pub fn simulated_factory(cities: Vec<String>) -> TaskFactory {
                     //    sleep 在 async 里**不会**阻塞事件循环，
                     //    所以并发才真的能重叠。
                     tokio::time::sleep(Duration::from_millis(SIMULATED_IO_MS)).await;
-                    Ok(format!("{city} 的模拟查询结果"))
+                    TaskResult::ok(format!("{city} 的模拟查询结果"), 1)
                 })
             })
             .collect::<Vec<Task>>()
@@ -87,7 +87,11 @@ pub fn real_factory(cities: Vec<String>) -> TaskFactory {
                     let args = serde_json::json!({ "location": city });
                     let ctx = crate::tools::ToolContext::with_timeout(Duration::from_secs(15));
 
-                    tool.call(&args, &ctx).await.map_err(|e: ToolError| e)
+                    // ⚠️ 失败也要带**错误对象** —— 不能只丢一个字符串。
+                    match tool.call(&args, &ctx).await {
+                        Ok(text) => TaskResult::ok(text, 1),
+                        Err(err) => TaskResult::failed(err.to_string(), 1, err),
+                    }
                 })
             })
             .collect::<Vec<Task>>()
@@ -113,7 +117,10 @@ pub fn blocking_factory(topics: Vec<String>, block_ms: u64) -> TaskFactory {
                     let args = serde_json::json!({ "topic": topic });
                     let ctx = crate::tools::ToolContext::empty();
 
-                    tool.call(&args, &ctx).await
+                    match tool.call(&args, &ctx).await {
+                        Ok(text) => TaskResult::ok(text, 1),
+                        Err(err) => TaskResult::failed(err.to_string(), 1, err),
+                    }
                 })
             })
             .collect::<Vec<Task>>()

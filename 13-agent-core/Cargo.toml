@@ -41,3 +41,7 @@ rag-08 = { path = "../08-rag" }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+
+# 属性测试（property-based testing）—— 对 ReAct 解析器做不变量测试。
+# 详见 tests/properties.rs 的模块文档。
+proptest = { workspace = true }

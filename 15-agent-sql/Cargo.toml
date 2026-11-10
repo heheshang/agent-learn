@@ -45,6 +45,10 @@ rag-07 = { path = "../07-query" }
 [dev-dependencies]
 tempfile = { workspace = true }
 
+# 属性测试 —— 对 SQL 安全护栏做不变量测试。
+# 详见 tests/properties.rs 的模块文档。
+proptest = { workspace = true }
+
 # 测试 HTTP API 层时用 `tower::ServiceExt::oneshot` 直接调路由 ——
 # 不开端口，零 IO 开销。
 tower = { workspace = true }

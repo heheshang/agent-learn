@@ -59,3 +59,7 @@ rag-04 = { path = "../04-rag" }
 
 [dev-dependencies]
 tower = { workspace = true }
+
+# 属性测试 —— 对缓存键做「任一字段变化必 miss」的不变量测试。
+# 详见 tests/properties.rs 的模块文档。
+proptest = { workspace = true }

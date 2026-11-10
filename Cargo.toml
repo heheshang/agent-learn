@@ -217,3 +217,21 @@ base64 = "0.22"
 futures = { version = "0.3.34", default-features = false, features = [
     "std",
 ] }
+
+# ── 属性测试 / 模糊测试 ───────────────────────────────────────────────
+# proptest：**属性测试**（property-based testing）框架。
+#
+# 与普通单元测试的区别：
+# - 单元测试：「输入 X 应该得到 Y」—— 需要人想出 X
+# - 属性测试：「任意输入都满足性质 P」—— 人只写性质，随机输入由框架生成，
+#   失败时**自动收缩（shrink）**成最小反例
+#
+# 本仓库用它做**解析器 / 校验器 / 缓存键**这类
+# 「输入完全不可信」的纯函数的不变量测试。
+#
+# ⚠️ `default-features = false` + 只开 `std`：
+#   proptest 的 `fork` / `timeout` feature 依赖 `fork` crate（Unix only），
+#   会引入额外的平台耦合；本仓库不需要。
+proptest = { version = "1.12.0", default-features = false, features = [
+    "std",
+] }

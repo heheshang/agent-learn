@@ -741,6 +741,42 @@ make lint    # clippy 零警告
 | `service_survives_a_broken_backend` | ★ 后端全挂也不影响请求（只记降级计数） |
 | `unreachable_redis_degrades_instead_of_failing` | 连不上 Redis → 降级不失败 |
 
+### ⭐ 属性测试：缓存键的「任一字段变化必 miss」
+
+缓存键是**精确匹配缓存**的心脏。本项目的硬约束①写得很直白：
+
+> **缓存键必须包含所有影响输出的东西**
+
+漏掉任何一个字段，就会在**两个本该不同的请求**之间返回错答 ——
+症状是「答案看起来很合理」，极难排查。
+
+这类 bug **没法靠单元测试穷举**：现有单元测试是「一个字段一个测试」，
+但**漏掉一个字段**这件事本身无法被「逐字段测试」发现 ——
+因为没写的那个测试根本不存在。
+
+属性测试换了个思路：不测「每个字段都进键了」，而是测「**任意两个输入，
+只要有一个字段不同，键就必须不同**」。
+
+```bash
+cargo test -p agent-21 --test properties
+```
+
+| 不变量 | 含义 |
+|---|---|
+| `any_field_change_changes_key` | ⭐⭐ **任一**字段变化 → 键必变（硬约束①的全字段版本） |
+| `message_content_change_changes_key` | 工具结果内容变化 → 键必变（21 修过的真 bug） |
+| `tool_call_arguments_change_changes_key` | 工具参数变化 → 键必变 |
+| `tool_name_change_changes_key` | 工具名变化 → 键必变 |
+| `message_order_change_changes_key` | 消息顺序变化 → 键必变 |
+| `same_input_same_key` | 相同输入 → 相同键（内容寻址） |
+| `key_shape_is_valid` | 键是 `{ns}:{version}:{16 位十六进制}` 三段结构 |
+| `digest_is_stable_sha256` | 摘要是稳定的 64 位 SHA-256 |
+
+⚠️ `any_field_change_changes_key` 有个**必须加的前提**：
+每一对「基字段 / 变体字段」必须**真的不同** ——
+随机生成的 `namespace_a` 和 `namespace_b` 可能相同，
+那时「键相同」是**正确行为**，不是 bug。
+
 ---
 
 ## 实现要点与踩坑

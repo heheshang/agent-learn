@@ -927,7 +927,41 @@ cargo test -p rag-08
 |---|---|---|
 | 单元测试（各模块内） | 否 | 分词、BM25 打分、RRF 融合、重排排序、错误映射 |
 | 集成测试（`tests/integration.rs`） | 否 | 建双索引 → 双路检索 → 融合 → 重排 → 命中正确性 |
+| **属性测试（`tests/properties.rs`）** | 否 | **分词器的不变量（13 条）** |
 | 端到端测试（需 API key） | 是 | 完整问答 |
+
+### ⭐ 属性测试：分词器的不变量
+
+分词器是 BM25 的**地基** —— 切错了检索质量整体塌方，
+而且症状极隐蔽（召回率低，但没有任何报错）。
+
+更关键的是：本仓库的 13（`search` 工具）、14、15、21 **全都复用它**。
+一处切错，全链路受影响。
+
+属性测试（proptest）让随机文本去撞不变量：
+
+| 不变量 | 含义 |
+|---|---|
+| `tokenizer_never_panics` | 任意文本都不 panic |
+| `tokens_are_never_empty` | 词元永不为空串（空串会让 BM25 分数失真） |
+| `latin_tokens_are_lowercased` | 拉丁词元全小写（`RAG` 与 `rag` 必须算同一个词） |
+| `punctuation_produces_no_tokens` | 纯标点不产生词元 |
+| `tokens_do_not_mix_scripts` | 词元不混脚本（否则长度归一化失真） |
+| `bigrams_are_exactly_the_adjacent_pairs` | ⭐ bigram 集合**精确等于**相邻字符对集合 |
+| `swapping_two_characters_changes_bigrams` | ⭐⭐ **顺序影响结果** —— 这是加 bigram 的全部意义 |
+| `whitespace_is_a_word_boundary` | 空白是词边界（两侧独立切分） |
+
+```bash
+cargo test -p rag-08 --test properties
+```
+
+#### ⚠️ 一个容易写错的性质
+
+「空白只是分隔符」如果写成「**删掉**空白结果不变」就是**错的** ——
+删掉 `"rag rag"` 的空格会得到 `"ragrag"`，两个拉丁词**合并成一个**。
+因为分词器把「连续的拉丁字母/数字」当作一个词。
+
+正确的不变量是「空白处切一刀，两侧各自独立切分」。
 
 集成测试用 [`ScriptedLlm`]（脚本化 LLM）和 `KeywordReranker`（确定性重排替身）
 把「LLM 会输出什么」这个不确定因素固定住，其余全都可以断言。

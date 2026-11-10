@@ -1,0 +1,11 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 2a3951cfe27becf71644c08934a8de3eaa0e9eef238e91d3c343b181a79b00c4 # shrinks to prefix = "", middle = "", suffix = "Final Answer:"
+cc 7967b75d9de100db13e3a83d92901aa9d1df6af2b0bd3ea9ed0bb7e2f73ad765 # shrinks to prefix = "", middle = "", suffix = "Action:"
+cc f6d67248b196a8163ce1734bedf8fb241009741229746194fc64795cd188b317 # shrinks to raw = "Action:Thought:Thought:"
+cc 4a151454803ce95305659c290c9f2e6b875caafe0c69fd8e3cdd3688a2bd2023 # shrinks to prefix = "", middle = "", suffix = "Action:"
+cc 8d35e39e855c9284b06a26ddad8177bd81dc61637f247db5f066c47b56161a09 # shrinks to prefix = "ẞẞ", suffix = ""

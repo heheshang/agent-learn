@@ -114,15 +114,136 @@ fn slow_registry(
     (registry, counters)
 }
 
+/// 一个「前 N 次失败（Transient）、之后成功」的工具。
+///
+/// ⚠️ 这是测**重试次数统计**的样本 —— 18 的中间件会重试它。
+struct FlakyTool {
+    fail_times: usize,
+    calls: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl std::fmt::Debug for FlakyTool {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FlakyTool")
+            .field("fail_times", &self.fail_times)
+            .finish()
+    }
+}
+
+impl FlakyTool {
+    fn new(fail_times: usize) -> (Arc<Self>, Arc<std::sync::atomic::AtomicUsize>) {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let tool = Arc::new(Self {
+            fail_times,
+            calls: calls.clone(),
+        });
+        (tool, calls)
+    }
+}
+
+impl AsyncTool for FlakyTool {
+    fn spec(&self) -> agent_16::tools::ToolSpec {
+        agent_16::tools::ToolSpec::new(
+            "flaky_tool",
+            "不稳定的上游，前几次调用会失败（临时故障）。",
+            json!({
+                "type": "object",
+                "properties": {
+                    "value": { "type": "string" }
+                },
+                "required": ["value"],
+                "additionalProperties": false
+            }),
+        )
+    }
+
+    fn call<'a>(
+        &'a self,
+        _args: &'a Value,
+        _ctx: &'a ToolContext,
+    ) -> agent_22::tools::ToolFuture<'a> {
+        let n = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+        let fail_times = self.fail_times;
+
+        Box::pin(async move {
+            if n <= fail_times {
+                // ⚠️ **Transient** —— 中间件会退避后重试。
+                return Err(agent_22::error::ToolError::upstream(
+                    "flaky_tool",
+                    format!("上游暂时不可用（第 {n} 次尝试）"),
+                ));
+            }
+            Ok(format!("第 {n} 次成功了"))
+        })
+    }
+}
+
+/// 一个「总是鉴权失败（Fatal）」的工具。
+///
+/// ⚠️ 这是测**致命错误不降级**的样本。
+struct FatalTool;
+
+impl std::fmt::Debug for FatalTool {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FatalTool").finish()
+    }
+}
+
+impl AsyncTool for FatalTool {
+    fn spec(&self) -> agent_16::tools::ToolSpec {
+        agent_16::tools::ToolSpec::new(
+            "fatal_tool",
+            "需要 API key 的工具，没配 key 时会鉴权失败。",
+            json!({
+                "type": "object",
+                "properties": {
+                    "value": { "type": "string" }
+                },
+                "required": ["value"],
+                "additionalProperties": false
+            }),
+        )
+    }
+
+    fn call<'a>(
+        &'a self,
+        _args: &'a Value,
+        _ctx: &'a ToolContext,
+    ) -> agent_22::tools::ToolFuture<'a> {
+        Box::pin(async move {
+            // ⚠️ **Fatal** —— 重试没用，降级会掩盖配置问题。
+            Err(agent_22::error::ToolError::unauthorized(
+                "fatal_tool",
+                "未配置 API key",
+            ))
+        })
+    }
+}
+
+/// 构造一个只含单个自定义工具的注册表。
+fn registry_with(tool: Arc<dyn AsyncTool>) -> agent_18::tool::ToolRegistry {
+    agent_22::tools::build_registry(vec![tool], None)
+}
+
 /// 构造一个 Agent（脚本 LLM）。
 fn build_agent(
     llm: Arc<ScriptedLlm>,
     registry: agent_18::tool::ToolRegistry,
     max_concurrency: usize,
 ) -> Arc<Agent> {
+    build_agent_with_retries(llm, registry, max_concurrency, 0)
+}
+
+/// 构造一个 Agent（可指定工具重试次数）。
+fn build_agent_with_retries(
+    llm: Arc<ScriptedLlm>,
+    registry: agent_18::tool::ToolRegistry,
+    max_concurrency: usize,
+    max_retries: usize,
+) -> Arc<Agent> {
     let middleware = ErrorHandlingMiddleware::new(registry)
         // ⚠️ 测试里不要退避等待 —— 退避会拖慢测试且不改变结论。
-        .with_max_retries(0)
+        .with_max_retries(max_retries)
         .with_base_delay(Duration::ZERO);
 
     let config = AgentConfig {
@@ -314,6 +435,172 @@ async fn empty_question_is_rejected() {
     let err = agent.run("   ").await.unwrap_err();
 
     assert_eq!(err.status_code(), 400);
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// 回归测试：致命错误不降级
+// ─────────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn fatal_tool_error_terminates_the_agent_loop() {
+    // ⚠️ **18 的结论在并发场景下同样成立**：Fatal 不能降级。
+    //
+    // 降级会让模型以为「工具坏了」→ 转而编答案，
+    // 把配置问题（鉴权失败）掩盖成幻觉。
+    use agent_18::llm::{ScriptedToolCall, step_calls, step_text};
+
+    let llm = Arc::new(ScriptedLlm::new(vec![
+        step_calls(vec![ScriptedToolCall::new(
+            "c1",
+            "fatal_tool",
+            json!({ "value": "x" }),
+        )]),
+        // ⚠️ 这一步**不应该**被走到 —— 致命错误必须终止。
+        step_text("不该出现的答案"),
+    ]));
+
+    let agent = build_agent(llm, registry_with(Arc::new(FatalTool)), 4);
+
+    let err = agent.run("问题").await.unwrap_err();
+
+    // ⚠️ Fatal → 500（服务端自己的问题）。
+    assert_eq!(err.status_code(), 500);
+    assert!(
+        err.to_string().contains("E_UNAUTHORIZED"),
+        "错误必须保留真实的错误码，实际：{err}"
+    );
+}
+
+#[tokio::test]
+async fn fatal_tool_error_still_produces_one_receipt_per_call_id() {
+    // ⚠️ **不变量 1 优先于不变量 2**。
+    //
+    // 16 实测：每个 `call_id` 必须有恰好一条 `tool` 消息，
+    // 少一条整个请求就 400 —— **包括致命错误这一条**。
+    //
+    // 所以终止之前**必须**先把回执生成完。
+    use agent_18::llm::{ScriptedToolCall, step_calls};
+
+    let llm = Arc::new(ScriptedLlm::new(vec![step_calls(vec![
+        ScriptedToolCall::new("c1", "fatal_tool", json!({ "value": "x" })),
+        ScriptedToolCall::new("c2", "tool_b", json!({ "value": "y" })),
+    ])]));
+
+    let (slow, _c) = SlowTool::new("tool_b", 10);
+    let slow_calls = slow.calls.clone();
+    let registry = agent_22::tools::build_registry(
+        vec![
+            Arc::new(FatalTool) as Arc<dyn AsyncTool>,
+            slow as Arc<dyn AsyncTool>,
+        ],
+        None,
+    );
+    let agent = build_agent(llm, registry, 4);
+
+    // 致命错误 → 整个请求失败。
+    let err = agent.run("问题").await.unwrap_err();
+    assert_eq!(err.status_code(), 500);
+
+    // ⚠️ 关键：另一个（正常）调用也**必须**被执行 ——
+    //    并发下两个任务是同时跑的，终止不能「取消」另一个。
+    assert_eq!(
+        slow_calls.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "并发下的另一个调用也必须被执行"
+    );
+}
+
+#[tokio::test]
+async fn business_tool_error_is_still_degraded_into_an_observation() {
+    // ⚠️ **对照组**：Business 错误**必须**降级成观察（18 的结论）。
+    //
+    // 只测「Fatal 会终止」是不够的 ——
+    // 如果实现变成「所有错误都终止」，Business 场景就崩了。
+    use agent_18::llm::{ScriptedToolCall, step_calls, step_text};
+
+    let llm = Arc::new(ScriptedLlm::new(vec![
+        step_calls(vec![ScriptedToolCall::new(
+            "c1",
+            "tool_a",
+            json!({ "value": 42 }),
+        )]),
+        step_text("工具失败了，我如实告知。"),
+    ]));
+
+    // ⚠️ `tool_a` 的 schema 要求 `value` 是字符串 ——
+    //    传数字 → Schema 校验失败 → Business。
+    let (registry, _counters) = slow_registry(&["tool_a"], 10);
+    let agent = build_agent(llm, registry, 4);
+
+    let run = agent.run("问题").await.unwrap();
+
+    assert!(!run.steps[0].tool_calls[0].ok);
+    assert_eq!(
+        run.steps[0].tool_calls[0].error_kind.as_deref(),
+        Some("business")
+    );
+    assert!(run.answer.contains("工具失败了"));
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// 回归测试：重试次数不能丢
+// ─────────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn retried_calls_are_counted_and_recorded() {
+    // ⚠️ **中间件重试了几次，记录里就必须显示几次**。
+    //
+    // 曾经 `attempts` 被写死成 1，导致：
+    // - `retried_calls` 恒为 0
+    // - 终端永远显示「1 次尝试」
+    use agent_18::llm::{ScriptedToolCall, step_calls, step_text};
+
+    let llm = Arc::new(ScriptedLlm::new(vec![
+        step_calls(vec![ScriptedToolCall::new(
+            "c1",
+            "flaky_tool",
+            json!({ "value": "x" }),
+        )]),
+        step_text("工具重试后成功了。"),
+    ]));
+
+    // 前 2 次失败（Transient）→ 中间件重试到第 3 次成功。
+    let (flaky, _counter) = FlakyTool::new(2);
+    let agent = build_agent_with_retries(llm, registry_with(flaky), 4, 2);
+
+    let run = agent.run("问题").await.unwrap();
+
+    let call = &run.steps[0].tool_calls[0];
+    assert!(call.ok, "重试后应该成功");
+    assert_eq!(call.attempts, 3, "尝试次数必须是真实的 3 次");
+    assert!(call.retried, "必须标记为被重试过");
+    assert_eq!(run.retried_calls, 1, "重试计数不能恒为 0");
+    // ⚠️ `tool_calls` 是「实际调用次数」（含重试）。
+    assert_eq!(run.tool_calls, 3);
+}
+
+#[tokio::test]
+async fn successful_call_reports_one_attempt() {
+    // ⚠️ 对照组：没重试的工具必须显示 1 次尝试。
+    use agent_18::llm::{ScriptedToolCall, step_calls, step_text};
+
+    let llm = Arc::new(ScriptedLlm::new(vec![
+        step_calls(vec![ScriptedToolCall::new(
+            "c1",
+            "tool_a",
+            json!({ "value": "x" }),
+        )]),
+        step_text("完成"),
+    ]));
+
+    let (registry, _counters) = slow_registry(&["tool_a"], 10);
+    let agent = build_agent(llm, registry, 4);
+
+    let run = agent.run("问题").await.unwrap();
+
+    assert_eq!(run.steps[0].tool_calls[0].attempts, 1);
+    assert!(!run.steps[0].tool_calls[0].retried);
+    assert_eq!(run.retried_calls, 0);
 }
 
 // ─────────────────────────────────────────────────────────────────────

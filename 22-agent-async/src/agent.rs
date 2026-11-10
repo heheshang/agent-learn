@@ -37,6 +37,20 @@
 //! 全部并发会打爆上游（429）、耗尽 fd、撑爆内存。
 //! LangChain 的 `max_concurrency` 就是为此而生 —— 本项目用
 //! [`crate::concurrency::ExecutionMode::Bounded`] 实现它。
+//!
+//! ## 坑 4：并发层会把语义字段丢掉（**自测时发现**）
+//!
+//! ⚠️ 本项目最初让 `run_one` 返回 `Result<String, ToolError>` ——
+//! **只带观察文本**，把中间件的 `outcome.attempts`（重试次数）
+//! 和错误的 `kind`（Fatal / Business / Transient）**丢在了并发层**。
+//!
+//! 后果：
+//! - **致命错误被降级成观察** —— 模型以为「工具坏了」→ 转而编答案，
+//!   把配置问题掩盖成幻觉（18 明确警告过）。
+//! - **`retried_calls` 恒为 0** —— `attempts` 被写死成 1。
+//!
+//! 修法：并发层的任务输出换成 [`crate::concurrency::TaskResult`]，
+//! 带 `observation` + `attempts` + `error`（**原始错误对象**）。
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -49,7 +63,7 @@ use genai::chat::{ChatMessage, MessageContent, ToolCall, ToolResponse};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::concurrency::{ExecutionMode, Task, TaskFactory, compare_all, run};
+use crate::concurrency::{ExecutionMode, Task, TaskFactory, TaskResult, compare_all, run};
 use crate::error::{AppError, AppResult, ToolError};
 use crate::prompt;
 use crate::tools::AsyncTool;
@@ -81,6 +95,26 @@ pub struct ToolCallRecord {
     /// 错误码（失败时）。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error_code: Option<String>,
+
+    /// 错误类别（失败时）：`transient` / `business` / `fatal`。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_kind: Option<String>,
+
+    /// 是否被重试过（`attempts > 1`）。
+    pub retried: bool,
+
+    /// ⚠️ 致命错误的**原始对象**（Fatal 时才有）。
+    ///
+    /// ## 为什么单独存
+    ///
+    /// `error_code` / `error_kind` 是给人看的**投影**，
+    /// 但终止 Agent 循环时需要构造 [`AppError`] ——
+    /// 那个构造需要**原始错误对象**（含 `code` / `kind` / `hint`）。
+    ///
+    /// 用 `unauthorized` 重新造一个会丢掉真实的错误码。
+    /// 所以这里保留原对象，但**不序列化**（避免 JSON 里出现重复信息）。
+    #[serde(skip)]
+    pub fatal_error: Option<ToolError>,
 }
 
 /// 一步的执行记录。
@@ -128,6 +162,12 @@ pub struct AgentRun {
 
     /// 是否因为达到步数上限而中止。
     pub hit_max_steps: bool,
+
+    /// 是否因为**致命错误**而终止。
+    ///
+    /// ⚠️ Fatal 错误**不降级**（18 的结论）——
+    /// 降级会让模型以为「工具坏了」转而编答案。
+    pub fatal_terminated: bool,
 
     /// 总耗时（毫秒）。
     pub elapsed_ms: u64,
@@ -269,6 +309,7 @@ impl Agent {
                     degraded_errors,
                     tools_used,
                     hit_max_steps: false,
+                    fatal_terminated: false,
                     elapsed_ms: start.elapsed().as_millis() as u64,
                     model: self.llm.model_name().to_string(),
                 });
@@ -309,6 +350,32 @@ impl Agent {
                 responses,
             )));
 
+            // ⚠️ 不变量 2：致命错误 → **终止**，**不返回模型的答案**。
+            //
+            // 18 的结论：Fatal 不能降级 —— 降级会让模型以为「工具坏了」，
+            // 转而编一个答案，把配置问题（鉴权失败等）掩盖成幻觉。
+            //
+            // ⚠️ 终止**发生在回执生成之后** —— 16 的坑 1：
+            // 少一条回执整个请求就 400，包括致命错误这一条。
+            //
+            // ⚠️ 判定放在 `steps.push` **之前** ——
+            //    致命错误时直接返回错误，不该把这一步记进 steps。
+            if let Some(fatal) = records.iter().find(|r| r.fatal_error.is_some()) {
+                let err = fatal
+                    .fatal_error
+                    .clone()
+                    .unwrap_or_else(|| ToolError::internal(fatal.name.clone(), "致命错误"));
+
+                warn!(
+                    step = step_no,
+                    tool = %fatal.name,
+                    code = err.diagnostic_code(),
+                    "致命错误 —— 终止 Agent 循环"
+                );
+
+                return Err(AppError::from_tool_error(&err));
+            }
+
             steps.push(StepRecord {
                 step: step_no,
                 text,
@@ -344,6 +411,7 @@ impl Agent {
             degraded_errors,
             tools_used,
             hit_max_steps: true,
+            fatal_terminated: false,
             elapsed_ms: start.elapsed().as_millis() as u64,
             model: self.llm.model_name().to_string(),
         })
@@ -374,22 +442,27 @@ impl Agent {
         let mut ordered: Vec<Option<ToolCallRecord>> = vec![None; calls.len()];
         for output in &report.results {
             let call = calls.get(output.index);
+            let error = output.result.error.clone();
             let record = ToolCallRecord {
                 call_id: call.map(|c| c.call_id.clone()).unwrap_or_default(),
                 name: output.name.clone(),
                 arguments: call.map(|c| c.fn_arguments.clone()).unwrap_or(Value::Null),
-                observation: match &output.result {
-                    Ok(text) => text.clone(),
-                    Err(err) => err.to_string(),
-                },
+                observation: output.result.observation.clone(),
                 ok: output.result.is_ok(),
-                attempts: 1,
+                // ⚠️ **真实**尝试次数 —— 中间件重试了几次就是几，
+                //    不能写死 1（否则 `retried_calls` 恒为 0）。
+                attempts: output.result.attempts,
                 blocking: self.is_blocking(&output.name),
-                error_code: output
-                    .result
-                    .as_ref()
-                    .err()
-                    .map(|e| e.diagnostic_code().to_string()),
+                error_code: error.as_ref().map(|e| e.diagnostic_code().to_string()),
+                error_kind: error.as_ref().map(|e| e.kind.name().to_string()),
+                retried: output.result.attempts > 1,
+                // ⚠️ 致命错误的**原始对象**必须保留 ——
+                //    Agent 循环靠它决定「终止」还是「降级」。
+                fatal_error: if output.result.is_fatal() {
+                    error
+                } else {
+                    None
+                },
             };
             ordered[output.index] = Some(record);
         }
@@ -410,6 +483,9 @@ impl Agent {
                     attempts: 1,
                     blocking: false,
                     error_code: Some("E_INTERNAL_FAULT".to_string()),
+                    error_kind: Some("fatal".to_string()),
+                    retried: false,
+                    fatal_error: Some(ToolError::internal("unknown", "并发执行的结果缺失")),
                 })
             })
             .collect()
@@ -446,9 +522,10 @@ impl Agent {
     /// 中间件把错误**降级**成观察文本，但**分类信息不能丢** ——
     /// 否则上层看到的全是「成功」，无法判断「该不该终止」。
     ///
-    /// 所以这里返回 `Err(ToolError)`：
+    /// 所以这里返回 [`TaskResult`]（带 `error` 对象 + `attempts`）：
     /// - 上层把它渲染成观察文本喂回模型（18 的语义）
     /// - 同时用它判断「是不是致命错误」（Fatal → 终止循环）
+    /// - 用它统计「实际尝试了几次」（重试次数）
     ///
     /// ## ⚠️ 为什么中间件要用 `Arc` 包住
     ///
@@ -457,7 +534,7 @@ impl Agent {
     ///
     /// ⚠️ 中间件本身是**只读**的（工具注册表是 `Vec<Arc<dyn Tool>>`），
     /// 所以多个并发任务共享一个中间件实例是**安全**的。
-    async fn run_one(self: Arc<Self>, request: ToolCallRequest) -> Result<String, ToolError> {
+    async fn run_one(self: Arc<Self>, request: ToolCallRequest) -> TaskResult {
         let outcome: MiddlewareOutcome = self.middleware.wrap_tool_call(&request).await;
 
         if !outcome.ok {
@@ -470,8 +547,8 @@ impl Agent {
         }
 
         match outcome.error {
-            Some(err) => Err(err),
-            None => Ok(outcome.observation),
+            Some(err) => TaskResult::failed(err.to_string(), outcome.attempts, err),
+            None => TaskResult::ok(outcome.observation, outcome.attempts),
         }
     }
 }

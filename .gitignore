@@ -99,6 +99,21 @@ __pycache__/
 # 只忽略 hooks 的运行时状态，保留共享的 hooks 配置本身。
 .cursor/hooks/state/
 
+# ── 模糊测试产物（可再生）────────────────────────────────────────────────
+# libFuzzer 的语料（corpus）与崩溃样本（artifacts）都是**自动生成**的，
+# 提交进去只会制造 diff 噪音。
+#
+# ⚠️ `fuzz/corpus/` 是 libFuzzer 的**工作语料**（每跑一次就长一堆），
+#    `fuzz/artifacts/` 是崩溃复现文件。
+#
+#    而 `fuzz/fuzz_targets/*.rs` 是**源码**，必须入库。
+fuzz/corpus/
+fuzz/artifacts/
+fuzz/target/
+
+# ⚠️ cargo-fuzz 的构建产物目录名是 `fuzz/target`，
+#    但主 workspace 的构建产物在根 `/target` —— 两者不冲突。
+
 # ── 历史备份 ────────────────────────────────────────────────────────────
 # ⚠️ `.legacy-git-history/` 里的 git bundle **是有意提交**的 ——
 #    它保存了「整合成单仓库」之前 04-rag 的完整历史。

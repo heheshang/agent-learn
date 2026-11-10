@@ -663,6 +663,69 @@ make test    # 单元 121 + 集成 19
 | 答案的数据支撑 | `grounded` 布尔值正确 |
 | 收尾调用失败 | 降级为「已收集到的观察摘要」，不丢前面的观察 |
 
+### ⭐ 属性测试：护栏的安全不变量
+
+护栏是**安全关键**模块 —— 它决定「模型生成的 SQL 能不能碰数据库」。
+输入是**模型生成的任意 SQL**，和 13 的 ReAct 解析器一样完全不可信。
+
+单元测试只能覆盖「人想得到的」攻击手法；属性测试（`tests/properties.rs`）
+让**随机拼接**的 SQL 去撞安全不变量，失败时自动收缩成最小反例：
+
+| 不变量 | 含义 |
+|---|---|
+| `dangerous_keywords_as_bare_words_are_always_rejected` | ⭐⭐ **黑名单裸词出现必被拦**（安全底线） |
+| `dangerous_keywords_inside_strings_are_allowed` | 字符串里的关键字**不误伤**（`WHERE name = 'DROP TABLE'` 是合法查询） |
+| `dangerous_keywords_inside_comments_are_allowed` | 注释里的关键字**不误伤** |
+| `multiple_statements_are_always_rejected` | 分号后有内容必被拦 |
+| `trailing_semicolon_is_allowed` | 末尾单个分号**合法**（不算多语句） |
+| `non_readonly_prefix_is_always_rejected` | 非只读开头必被拦 |
+| `clean_readonly_queries_are_allowed` | 干净查询**不误伤** |
+| `comments_never_become_words` | 注释内容不进词法单元 |
+| `strings_are_single_tokens` | 字符串字面量整体算一个 `Str` |
+| `escaped_quotes_do_not_break_strings` | `''` 转义不打断字符串 |
+| `guard_never_panics` | 任意 SQL 都不 panic |
+
+```bash
+cargo test -p agent-15 --test properties
+```
+
+#### 为什么这些性质难写（实战教训）
+
+写这类性质时有三个**必须避开的坑**：
+
+**① 「不该被拦」的性质要排除「正当的拦截」**
+
+护栏有**两种**拦截理由（关键字 vs 多语句）。
+「字符串里的 `DROP` 不该被拦」这条性质，如果拼进去的噪声里含分号，
+护栏会以 `MultipleStatements` 拦掉 —— 那是**正确行为**，不是误伤。
+所以前提必须显式排除：`prop_assume!(!sql.contains(';'))`。
+
+**② 未闭合的块注释会吞掉后面的内容**
+
+`SELECT 1; /* DROP` 里，`/*` 之后的全被当成注释 ——
+「分号后有内容」这件事**并不成立**。
+这类性质要用**不含注释符**的噪声生成器。
+
+**③ 排除太严会导致 `Too many global rejects`**
+
+最初「bigram 保留词序」那条用了「两串字符集合相同」作前提 ——
+随机生成两串 CJK 几乎不可能字符集合相同，于是 100% reject，测试直接 aborted。
+改成**可构造的等价形式**（「交换两个字符」）才解决。
+
+#### ⚠️ 另一个层面的检查：模糊测试找「绕过」
+
+`fuzz/fuzz_targets/sql_guard.rs` 用 **libFuzzer** 跑这个护栏，
+而且**不只找 panic，还找绕过**：
+
+> 护栏放行（`Ok`）**且**独立实现的扫描发现裸词危险关键字 → 判定为绕过。
+
+⚠️ 独立实现是**必需的** —— 直接用护栏自己的 `tokenize_sql` 做对照，
+就变成「用被测代码验证被测代码」：护栏的词法分析有 bug 时两边会一起错，检测不出来。
+
+```bash
+make fuzz-build && make fuzz-run
+```
+
 ## 踩坑记录
 
 ### 坑 1：模型不查库就作答，数字是编的 ⚠️ 实测
