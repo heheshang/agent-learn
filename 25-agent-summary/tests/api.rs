@@ -170,3 +170,187 @@ async fn unknown_route_is_404() {
     let (status, _) = call(&app(), get("/nope")).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// P0 新增：Agent 与工具端点
+// ─────────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn tools_endpoint_lists_the_four_tools() {
+    let (status, body) = call(&app(), get("/tools")).await;
+    assert_eq!(status, StatusCode::OK);
+    // ★ 四个工具 —— 工具多了会让模型凑数调用。
+    for name in [
+        "module_stats",
+        "search_activities",
+        "query_stats",
+        "calculate",
+    ] {
+        assert!(body.contains(name), "工具清单里应该包含 {name}");
+    }
+}
+
+#[tokio::test]
+async fn direct_tool_call_returns_real_data() {
+    let (status, body) = call(
+        &app(),
+        post(
+            "/tools/call",
+            serde_json::json!({"tool": "module_stats", "args": {"scope": "cache"}}),
+        ),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("\"ok\":true"));
+    // ★ 工具**真的执行了** —— 返回了结构化数据，不是编的。
+    assert!(body.contains("\"data\""));
+    assert!(body.contains("cache"));
+}
+
+#[tokio::test]
+async fn direct_tool_call_with_bad_args_is_400() {
+    let (status, body) = call(
+        &app(),
+        post(
+            "/tools/call",
+            serde_json::json!({"tool": "module_stats", "args": {}}),
+        ),
+    )
+    .await;
+
+    // ★ 用户直接调工具时，错误**原样返回**（400），不降级成观察。
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(body.contains("E_INVALID_ARGUMENTS"));
+}
+
+#[tokio::test]
+async fn direct_tool_call_with_unknown_tool_is_400() {
+    let (status, body) = call(
+        &app(),
+        post(
+            "/tools/call",
+            serde_json::json!({"tool": "nope", "args": {}}),
+        ),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    // ★ 错误里必须列出**可用工具** —— 模型据此纠正。
+    assert!(body.contains("module_stats"));
+}
+
+#[tokio::test]
+async fn sql_guard_blocks_writes_over_http() {
+    let (status, body) = call(
+        &app(),
+        post(
+            "/tools/call",
+            serde_json::json!({
+                "tool": "query_stats",
+                "args": {"sql": "DELETE FROM activity"}
+            }),
+        ),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    // ★ 护栏真的拦住了（工具返回失败观察，不是 HTTP 错误）。
+    assert!(body.contains("\"ok\":false"));
+    assert!(body.contains("E_RULE_VIOLATION"));
+}
+
+#[tokio::test]
+async fn agent_endpoint_without_llm_is_503() {
+    let (status, body) = call(
+        &app(),
+        post(
+            "/agent",
+            serde_json::json!({"question": "cache 模块做了什么？"}),
+        ),
+    )
+    .await;
+
+    // ★ 没配 LLM 是 503（服务端暂时不可用），不是 400 也不是 500。
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert!(body.contains("DEEPSEEK_API_KEY"));
+}
+
+#[tokio::test]
+async fn unknown_protocol_is_400() {
+    // ⚠️ 协议名拼错**不能**默默跑默认协议 ——
+    //    那会让「协议对照实验」作废（两次跑的是同一条链路）。
+    let (status, body) = call(
+        &app(),
+        post(
+            "/agent",
+            serde_json::json!({"question": "查一下", "protocol": "reactt"}),
+        ),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(body.contains("protocol"));
+}
+
+#[tokio::test]
+async fn react_protocol_without_llm_is_503() {
+    // ⚠️ LLM 可用性检查要**下沉到各协议分支** ——
+    //    提前用 `state.llm` 把门，会让「只配了 react LLM」的部署
+    //    永远 503。
+    let (status, _body) = call(
+        &app(),
+        post(
+            "/agent",
+            serde_json::json!({"question": "查一下", "protocol": "react"}),
+        ),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[tokio::test]
+async fn structured_protocol_without_llm_is_503() {
+    let (status, _body) = call(
+        &app(),
+        post(
+            "/agent",
+            serde_json::json!({"question": "查一下", "protocol": "structured"}),
+        ),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[tokio::test]
+async fn agent_endpoint_rejects_empty_question() {
+    let (status, _) = call(
+        &app(),
+        post("/agent", serde_json::json!({"question": "   "})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn summary_uses_the_provided_query() {
+    // ⚠️ 回归测试：第一版把 query **静默丢弃**了（写死 "cache"）。
+    //    现在传了就必须用传的。
+    let (status, body) = call(
+        &app(),
+        post(
+            "/summary",
+            serde_json::json!({
+                "start": 1_700_000_000i64,
+                "end": 1_700_000_000i64 + 7 * 86_400,
+                "query": "vllm"
+            }),
+        ),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("\"query\":\"vllm\""));
+}

@@ -40,6 +40,25 @@
 //! | [`concurrency`] | 并发 | 22 的四档模式 |
 //! | [`aggregate`] | **聚合（核心）** | 三档策略 |
 //!
+//! ## ★ P1：接进 `genai-agentprism` 的六项能力
+//!
+//! | 能力 | 落点 |
+//! |---|---|
+//! | Schema 消毒（`sanitize_json_schema`） | [`tool`] —— **不自己改写**，交给适配器 |
+//! | 结构化输出（`JsonSpec` / `JsonMode`） | [`structured`] + [`llm`] |
+//! | token 计量（`usage`） | [`llm::LlmUsage`] |
+//! | 截断检测（`StopReason::is_max_tokens`） | [`llm::LlmReply::truncated`] |
+//! | 思考内容回传（`ContentPart::ReasoningContent`） | [`agent_loop`] |
+//! | 提示词缓存键（`with_prompt_cache_key`） | [`llm::LlmOptions::prompt_cache_key`] |
+//!
+//! ## ★ 三条协议
+//!
+//! | 协议 | 用途 |
+//! |---|---|
+//! | `react` | 文本协议（13 的路子）—— **要正则解析** |
+//! | `function` | 结构化工具调用（16 的路子）—— 不用解析 |
+//! | `structured` | 结构化输出（19 的路子）—— **结论可校验** |
+//!
 //! ## ★ 三档策略 —— 本项目最重要的产出
 //!
 //! | 变体 | 做了什么 | 验证什么 |
@@ -73,6 +92,7 @@
 //! 写测试前要先分清，否则会去改本来正确的代码。
 
 pub mod agent;
+pub mod agent_loop;
 pub mod aggregate;
 pub mod api;
 pub mod bench;
@@ -81,13 +101,16 @@ pub mod concurrency;
 pub mod config;
 pub mod error;
 pub mod ingest;
+pub mod llm;
 pub mod loadtest;
 pub mod metrics;
 pub mod model;
 pub mod pipeline;
 pub mod render;
 pub mod retrieve;
+pub mod structured;
 pub mod table;
+pub mod tool;
 pub mod tooling;
 
 pub use aggregate::{Aggregator, Strategy};

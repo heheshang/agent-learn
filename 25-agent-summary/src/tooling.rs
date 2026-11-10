@@ -494,6 +494,28 @@ pub enum GuardError {
     ForbiddenKeyword(String),
 }
 
+impl std::fmt::Display for GuardError {
+    /// ★ 渲染成**给模型看**的文本。
+    ///
+    /// ⚠️ 文案必须**可执行** —— 模型要据此改写 SQL。
+    /// 「非法 SQL」这种描述没有信息量。
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            GuardError::Empty => write!(f, "SQL 是空的"),
+            GuardError::TooLong { len, limit } => {
+                write!(f, "SQL 太长了（{len} 字符，上限 {limit}）")
+            }
+            GuardError::NotReadOnly => {
+                write!(f, "只允许只读语句（SELECT / WITH / VALUES / EXPLAIN）")
+            }
+            GuardError::MultipleStatements => write!(f, "一次只能执行一条 SQL"),
+            GuardError::ForbiddenKeyword(kw) => {
+                write!(f, "SQL 里出现了被禁止的关键字「{kw}」")
+            }
+        }
+    }
+}
+
 /// SQL 长度上限。
 pub const MAX_SQL_LEN: usize = 8000;
 

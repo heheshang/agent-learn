@@ -12,6 +12,18 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 chrono = { workspace = true }
 
+# ── LLM 调用 ────────────────────────────────────────────────────────
+#
+# ⚠️ 25 之前是「零 LLM 依赖」的纯 CPU 压测台 ——
+#    结果是 `parse_react_output` 解析的是**代码拼出来的字符串**，
+#    「这个解析器在真实模型输出下能不能工作」**没有证据**。
+#
+# 接上真实模型后，25 的核心结论（「归因到哪一层取决于在哪一层测」）
+# 才真正成立 —— 因为 LLM 延迟会成为新的主导项。
+#
+# genai 走 DeepSeek 适配器，需要 `DEEPSEEK_API_KEY` 环境变量。
+genai = { workspace = true }
+
 # ── HTTP API 层 ──────────────────────────────────────────────────────
 axum = { workspace = true }
 tower-http = { workspace = true }

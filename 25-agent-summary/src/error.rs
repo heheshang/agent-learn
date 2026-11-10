@@ -37,6 +37,18 @@ pub enum AppError {
     /// 资源不存在（404）。
     #[error("资源不存在：{0}")]
     NotFound(String),
+
+    /// ★ 模型调用失败（502）。
+    ///
+    /// ## ⚠️ 为什么模型失败**不能**降级
+    ///
+    /// 降级意味着「把错误变成观察喂回模型」——
+    /// 但**没有模型就没有答案**，模型自己纠正不了「模型挂了」。
+    ///
+    /// 502 的语义就是「上游网关/服务返回了无效响应」，
+    /// 和 500（服务端自己的 bug）、503（稍后重试可能成功）都不同。
+    #[error("模型调用失败：{0}")]
+    BadGateway(String),
 }
 
 /// 错误响应体。
@@ -57,6 +69,7 @@ impl AppError {
             AppError::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
             AppError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
             AppError::NotFound(_) => StatusCode::NOT_FOUND,
+            AppError::BadGateway(_) => StatusCode::BAD_GATEWAY,
         }
     }
 
@@ -67,6 +80,7 @@ impl AppError {
             AppError::Unavailable(_) => "E_UNAVAILABLE",
             AppError::Internal(_) => "E_INTERNAL",
             AppError::NotFound(_) => "E_NOT_FOUND",
+            AppError::BadGateway(_) => "E_LLM_FAILED",
         }
     }
 }
@@ -113,6 +127,11 @@ mod tests {
         assert_eq!(
             AppError::NotFound("x".into()).status_code(),
             StatusCode::NOT_FOUND
+        );
+        // ★ 模型失败是 502 —— 不是 500（服务端 bug），也不是 503（稍后重试）。
+        assert_eq!(
+            AppError::BadGateway("x".into()).status_code(),
+            StatusCode::BAD_GATEWAY
         );
     }
 

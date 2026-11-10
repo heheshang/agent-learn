@@ -37,6 +37,24 @@ pub struct AppConfig {
 
     /// 输出目录。
     pub output_dir: String,
+
+    /// ★ 模型名（LLM 链路用）。
+    pub model: String,
+
+    /// ★ 最大输出 token。
+    ///
+    /// ⚠️ 推理模型的思考 token 与正文**共用**这个额度 ——
+    /// 调小会让正文被思考吃光（`finish_reason = length`）。
+    pub max_tokens: u32,
+
+    /// ★ 工具选择策略（`auto` / `none` / `required` / `forced:工具名`）。
+    ///
+    /// ## ⚠️ `none` 的语义不是「模型不许调」
+    ///
+    /// 它是「**不把工具传给模型**」——
+    /// 16-agent-function-calling 实测：只传 `tool_choice: "none"`
+    /// 但仍把工具列表传过去，模型会用**文本**模拟调用。
+    pub tool_choice: String,
 }
 
 impl Default for AppConfig {
@@ -51,6 +69,9 @@ impl Default for AppConfig {
             server_workers: 8,
             strategy: Strategy::Optimized,
             output_dir: "reports".to_string(),
+            model: "deepseek-flash".to_string(),
+            max_tokens: 2048,
+            tool_choice: "auto".to_string(),
         }
     }
 }
@@ -71,7 +92,18 @@ impl AppConfig {
                 .pipe(Strategy::parse)
                 .unwrap_or(Strategy::Optimized),
             output_dir: env_str("WK_OUTPUT_DIR", "reports"),
+            model: env_str("WK_MODEL", "deepseek-flash"),
+            max_tokens: env_u32("WK_MAX_TOKENS", 2048),
+            tool_choice: env_str("WK_TOOL_CHOICE", "auto"),
         }
+    }
+
+    /// ★ 解析后的工具选择策略。
+    ///
+    /// ⚠️ 解析失败**回落到 `auto`** —— 拼错策略名不该让服务起不来。
+    pub fn tool_choice_mode(&self) -> crate::llm::ToolChoice {
+        crate::llm::parse_tool_choice(&self.tool_choice)
+            .unwrap_or(crate::llm::ToolChoice::Auto)
     }
 
     /// 监听地址（`host:port`）。
@@ -101,6 +133,11 @@ pub fn env_usize(key: &str, default: usize) -> usize {
 /// 环境变量 u16。
 pub fn env_u16(key: &str, default: u16) -> u16 {
     env_u64(key, default as u64) as u16
+}
+
+/// 环境变量 u32。
+pub fn env_u32(key: &str, default: u32) -> u32 {
+    env_u64(key, default as u64) as u32
 }
 
 /// 环境变量 f64。
@@ -155,5 +192,26 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(c.bind_addr(), "0.0.0.0:1234");
+    }
+
+    #[test]
+    fn tool_choice_defaults_to_auto() {
+        // ⚠️ 默认必须是 `auto` —— 16-agent-function-calling 实测：
+        //    `auto` 是唯一正确的默认档。
+        assert_eq!(c_tool_choice("auto"), crate::llm::ToolChoice::Auto);
+    }
+
+    #[test]
+    fn tool_choice_falls_back_to_auto_on_typo() {
+        // ⚠️ 拼错策略名**不该**让服务起不来 —— 回落到 `auto`。
+        assert_eq!(
+            crate::llm::parse_tool_choice("autoo"),
+            None,
+            "解析不出来就应该回落到默认值"
+        );
+    }
+
+    fn c_tool_choice(value: &str) -> crate::llm::ToolChoice {
+        crate::llm::parse_tool_choice(value).unwrap_or(crate::llm::ToolChoice::Auto)
     }
 }

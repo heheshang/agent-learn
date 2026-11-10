@@ -119,6 +119,29 @@ fn strip_code_fence(text: &str) -> String {
     t.to_string()
 }
 
+/// ★ 从一段文本里抽出**第一个合法的 JSON 对象**。
+///
+/// ## ⚠️ 为什么不能「找第一个 `{` 到最后一个 `}`」
+///
+/// 模型输出里常有 `{周报}` 这类**括号配对但不是合法 JSON**的占位。
+/// 判据必须是「能 `from_str` 成功」而不是「括号配对」。
+///
+/// ## ⚠️ 为什么不用「第一个 `{`」
+///
+/// 前言里也可能有花括号（`{注意}`）——
+/// 逐个**试解析**，第一个成功的就是答案。
+pub fn extract_json_object(text: &str) -> Option<Value> {
+    let cleaned = strip_code_fence(text.trim());
+
+    if let Ok(v) = serde_json::from_str::<Value>(&cleaned)
+        && v.is_object()
+    {
+        return Some(v);
+    }
+
+    scan_balanced_json(&cleaned)
+}
+
 /// ★ 逐字符扫配对括号，跳过字符串字面量。
 fn scan_balanced_json(text: &str) -> Option<Value> {
     let chars: Vec<char> = text.chars().collect();
@@ -586,6 +609,18 @@ mod tests {
     fn falls_back_to_text_arg() {
         let args = parse_action_input("随便一段话");
         assert_eq!(args["input"], "随便一段话");
+    }
+
+    #[test]
+    fn extracts_the_first_valid_json_object() {
+        // ⚠️ `{周报}` 括号配对但不是合法 JSON —— 必须跳过它。
+        let value = extract_json_object("前言 {周报} 然后 {\"scope\": \"cache\"}").unwrap();
+        assert_eq!(value["scope"], "cache");
+    }
+
+    #[test]
+    fn extract_json_object_returns_none_when_there_is_none() {
+        assert!(extract_json_object("今天天气不错").is_none());
     }
 
     #[test]

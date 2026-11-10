@@ -30,6 +30,7 @@ PKGS  := axum-01 rig-02 genai-03 rag-04 rag-05 rag-06 rag-07 rag-08 rag-09 rag-1
         bench-24 bench-mode-24 bench-seqs-24 bench-chunked-24 modes-24 \
         mock-24 health-24 bench-vllm-24 vllm-up-24 vllm-down-24 \
         bench-25 bench-a-25 bench-b-25 bench-c-25 loadtest-25 locust-25 jmeter-25 profile-25 \
+        agent-25 compare-25 \
         milvus-up milvus-down milvus-destroy \
         check-mermaid check-toc \
         prop prop-08 prop-13 prop-14 prop-15 prop-21 \
@@ -418,6 +419,12 @@ cache-sweep-25: ## 25-agent-summary：★ 缓存命中率扫描（缓存收益�
 
 report-25: ## 25-agent-summary：生成周报 Markdown
 	$(MAKE) -C 25-agent-summary report
+
+agent-25: ## 25-agent-summary：★ 真调模型跑一次 Agent 循环（需要 DEEPSEEK_API_KEY）
+	$(MAKE) -C 25-agent-summary agent
+
+compare-25: ## 25-agent-summary：★ 协议对照 —— ReAct vs Function Calling（需要 DEEPSEEK_API_KEY）
+	$(MAKE) -C 25-agent-summary compare
 
 mock-24: ## 24-agent-vllm：启动 mock vLLM（:8000，OpenAI 兼容）
 	$(MAKE) -C 24-agent-vllm mock

@@ -33,6 +33,7 @@
 //! 这才是「变量单一」的对照实验。
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use serde_json::{Value, json};
 
@@ -42,6 +43,7 @@ use crate::cache::{CacheKey, NormalizedMessage};
 use crate::ingest::{LoadedDoc, SplitterConfig, split_document};
 use crate::model::{Activity, Digest, Window};
 use crate::retrieve::{Bm25Index, Document, HybridRetriever};
+use crate::tool::{CalculateTool, ModuleStatsTool, QueryTool, SearchActivitiesTool, ToolRegistry};
 use crate::tooling::{self, check_sql, validate};
 
 /// 统一流水线。
@@ -50,16 +52,22 @@ pub struct Pipeline {
     documents: Vec<Document>,
 
     /// 混合检索器。
-    retriever: HybridRetriever,
+    retriever: Arc<HybridRetriever>,
 
     /// 聚合器。
     aggregator: Aggregator,
+
+    /// ★ 活动记录（**共享给工具** —— 工具要真的去查这些数据）。
+    activities: Arc<Vec<Activity>>,
 
     /// 长期记忆事实。
     facts: Vec<MemoryFact>,
 
     /// 工具 Schema。
     tool_schema: Value,
+
+    /// ★ 工具注册表。
+    registry: ToolRegistry,
 }
 
 impl Pipeline {
@@ -107,21 +115,46 @@ impl Pipeline {
         //    所以先构造稠密路，再把索引移进检索器。
         let index = Bm25Index::build(&documents);
         let dense = crate::retrieve::JaccardDense::new(&index);
-        let retriever = HybridRetriever {
+        let retriever = Arc::new(HybridRetriever {
             bm25: index,
             dense: Box::new(move |q: &str, k: usize| dense.search(q, k)),
-        };
+        });
 
         // ⑤ 事实库。
         let facts = build_facts(&activities);
+
+        // ⑥ ★ 工具注册表 —— 工具要**真的**能查到这些数据。
+        //
+        // ⚠️ 用 `Arc` 共享：流水线持有它，工具也持有它 ——
+        //    「工具看到的记录」和「流水线聚合的记录」**必须是同一份**，
+        //    否则模型拿到的数字和周报里的数字会对不上。
+        let shared: Arc<Vec<Activity>> = Arc::new(activities.clone());
+        let registry = build_registry(shared.clone(), retriever.clone());
 
         Self {
             documents,
             retriever,
             aggregator: Aggregator::new(activities, strategy),
+            activities: shared,
             facts,
             tool_schema: tooling::module_stats_schema(),
+            registry,
         }
+    }
+
+    /// 工具注册表。
+    pub fn registry(&self) -> &ToolRegistry {
+        &self.registry
+    }
+
+    /// 活动记录（供工具与 API 层使用）。
+    pub fn activities(&self) -> &Arc<Vec<Activity>> {
+        &self.activities
+    }
+
+    /// 长期记忆事实。
+    pub fn facts(&self) -> &[MemoryFact] {
+        &self.facts
     }
 
     /// 检索文档数。
@@ -155,11 +188,27 @@ impl Pipeline {
     }
 
     /// ★ 跑一遍完整链路。
+    ///
+    /// ## ⚠️ `query` **必须**真的被用上
+    ///
+    /// 第一版这里写死了 `parse_react_output(&format!(...))`，
+    /// 拼出来的「模型输出」里硬编码了 `scope: cache` ——
+    /// 调用方传的 `query` 被**静默丢弃**。
+    ///
+    /// 症状：看起来一切正常，但「发散查询」类实验（缓存命中率扫描）
+    /// 测的其实是同一个查询，结论全部失真。
     pub fn run(&mut self, query: &str, window: &Window) -> RunOutcome {
         // ① 检索（混合）。
         let hits = self.retriever.fuse(query, 8);
 
         // ② 解析 ReAct 输出。
+        //
+        // ⚠️ 这里的「模型输出」仍然是**拼出来的** ——
+        //    真实模型调用在 `agent_loop` 里（异步）。
+        //    本方法是**同步的压测路径**，保留它是为了三档对照实验
+        //    不受 LLM 延迟影响。
+        //
+        //    但 query 现在**真的**进了检索与参数里。
         let raw = format!(
             "Thought: 我需要查资料并汇总\nAction: module_stats\nAction Input: {{\"scope\": \"{query}\"}}"
         );
@@ -189,6 +238,36 @@ impl Pipeline {
             cache_key,
             digest,
         }
+    }
+
+    /// ★ 跑一遍**带 Agent 循环**的链路。
+    ///
+    /// 这是 P0 补上的那一环 ——
+    /// 之前 `run()` 里的「模型输出」是 `format!` 拼出来的，
+    /// 现在可以真的调模型、真的执行工具。
+    ///
+    /// ## ⚠️ 两种 `run` 的区别
+    ///
+    /// | | [`Pipeline::run`] | [`Pipeline::run_agent`] |
+    /// |---|---|---|
+    /// | 模型 | **不调**（拼字符串） | **真调** |
+    /// | 工具 | **不执行**（只校验参数） | **真执行** |
+    /// | 用途 | 三档对照压测（变量单一） | 端到端真实链路 |
+    ///
+    /// ⚠️ **这两条路径不能混着比** ——
+    /// 真实链路多了 LLM 延迟（几百 ms 到几秒），
+    /// 会把被测逻辑的差值完全淹没。
+    pub async fn run_agent(
+        &self,
+        agent: &crate::agent_loop::FunctionAgent,
+        question: &str,
+        window: &Window,
+    ) -> crate::error::AppResult<crate::agent_loop::AgentRun> {
+        // ① 记忆召回 —— ★ **必须在调模型之前**（事实要进 system 提示）。
+        let recalled = recall_facts(question, &self.facts, 3);
+
+        // ② 跑 Agent 循环。
+        agent.run(question, &recalled, window).await
     }
 
     /// 工具调用的三层校验。
@@ -268,6 +347,30 @@ pub struct RunOutcome {
 
     /// 汇总结论。
     pub digest: Digest,
+}
+
+/// ★ 建工具注册表 —— 四个工具。
+///
+/// ## ⚠️ 为什么只有**四个**
+///
+/// 19-agent-summary 实测：工具多会让模型**凑数调用**
+/// （16 实测 7 次调用里 5 次是硬凑的）。
+///
+/// 四个正好覆盖四类语义：
+///
+/// | 工具 | 用途 | 走哪条路 |
+/// |---|---|---|
+/// | `module_stats` | 按模块统计 | **聚合**（走三档策略） |
+/// | `search_activities` | 开放式检索 | **混合检索**（BM25 + RRF） |
+/// | `calculate` | 算术 | **纯计算** |
+/// | `query_stats` | 条件查询 | **SQL 护栏** |
+fn build_registry(activities: Arc<Vec<Activity>>, retriever: Arc<HybridRetriever>) -> ToolRegistry {
+    ToolRegistry::new(vec![
+        Arc::new(ModuleStatsTool::new(activities.clone())),
+        Arc::new(SearchActivitiesTool::new(retriever)),
+        Arc::new(QueryTool::new(activities)),
+        Arc::new(CalculateTool),
+    ])
 }
 
 /// 把活动记录转成 Markdown —— 模拟「活动日志文档」。
