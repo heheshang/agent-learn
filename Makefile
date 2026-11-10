@@ -11,14 +11,14 @@
 # ============================================================================
 
 CARGO := cargo
-PKGS  := axum-01 rig-02 genai-03 rag-04 rag-05 rag-06 rag-07 rag-08 rag-09 rag-10 rag-11 rag-12 agent-13 agent-14 agent-15 agent-16 agent-17 agent-18 agent-19 agent-20 agent-21 agent-22
+PKGS  := axum-01 rig-02 genai-03 rag-04 rag-05 rag-06 rag-07 rag-08 rag-09 rag-10 rag-11 rag-12 agent-13 agent-14 agent-15 agent-16 agent-17 agent-18 agent-19 agent-20 agent-21 agent-22 agent-23 agent-24
 
 .DEFAULT_GOAL := help
 .PHONY: help build run test check fmt fmt-check lint clean logs \
-        01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 18 19 20 21 22 \
+        01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 \
         axum rig genai rag agent \
-        serve-06 serve-07 serve-08 serve-09 serve-10 serve-11 serve-12 serve-13 serve-14 serve-15 serve-16 serve-17 serve-18 serve-19 serve-21 serve-22 \
-        demo-04 demo-05 demo-06 demo-07 demo-08 demo-09 demo-10 demo-11 demo-12 demo-13 demo-14 demo-15 demo-16 demo-17 demo-18 demo-19 demo-21 demo-22 \
+        serve-06 serve-07 serve-08 serve-09 serve-10 serve-11 serve-12 serve-13 serve-14 serve-15 serve-16 serve-17 serve-18 serve-19 serve-21 serve-22 serve-23 serve-24 \
+        demo-04 demo-05 demo-06 demo-07 demo-08 demo-09 demo-10 demo-11 demo-12 demo-13 demo-14 demo-15 demo-16 demo-17 demo-18 demo-19 demo-21 demo-22 demo-23 demo-24 \
         compare-07 compare-08 compare-09 compare-10 compare-11 compare-12 compare-13 compare-14 compare-16 compare-17 compare-18 compare-19 compare-21 compare-22 \
         semantics-21 \
         call-14 guard-15 \
@@ -26,6 +26,9 @@ PKGS  := axum-01 rig-02 genai-03 rag-04 rag-05 rag-06 rag-07 rag-08 rag-09 rag-1
         profile-20 pprof-20 bench-20 setup-20 py-compare \
         redis-up-21 redis-down-21 \
         bench-22 bench-real-22 modes-22 \
+        bench-23 bench-rerank-23 sweep-23 bench-remote-23 \
+        bench-24 bench-mode-24 bench-seqs-24 bench-chunked-24 modes-24 \
+        mock-24 health-24 bench-vllm-24 vllm-up-24 vllm-down-24 \
         milvus-up milvus-down milvus-destroy \
         check-mermaid check-toc \
         prop prop-08 prop-13 prop-14 prop-15 prop-21 \
@@ -140,6 +143,12 @@ clean: ## 清理构建产物
 22: ## 22-agent-async：★ ★ ★ 并发对照实验（模拟负载）
 	$(MAKE) -C 22-agent-async bench
 
+23: ## 23-agent-batch：★ ★ ★ 批处理对照实验（嵌入 + 重排）
+	$(MAKE) -C 23-agent-batch bench
+
+24: ## 24-agent-vllm：★ ★ ★ 批处理对照实验（连续批处理调度器）
+	$(MAKE) -C 24-agent-vllm bench
+
 axum: 01 ## 别名
 rig: 02 ## 别名
 genai: 03 ## 别名
@@ -195,6 +204,12 @@ serve-21: ## 启动 21-agent-cache 服务（:3130）
 
 serve-22: ## 启动 22-agent-async 服务（:3140）
 	$(MAKE) -C 22-agent-async serve
+
+serve-23: ## 启动 23-agent-batch 服务（:3150）
+	$(MAKE) -C 23-agent-batch serve
+
+serve-24: ## 启动 24-agent-vllm 服务（:3160）
+	$(MAKE) -C 24-agent-vllm serve
 
 mcp-14: ## 启动 14-agent-tool 内置 MCP 服务器（:3071）
 	$(MAKE) -C 14-agent-tool mcp
@@ -261,6 +276,12 @@ demo-21: ## 21-agent-cache：★ 连跑两次同一问题（演示缓存命中�
 demo-22: ## 22-agent-async：★ ★ ★ 并发对照实验（模拟负载）
 	$(MAKE) -C 22-agent-async bench
 
+demo-23: ## 23-agent-batch：★ ★ ★ 批处理对照实验（嵌入 + 重排）
+	$(MAKE) -C 23-agent-batch bench
+
+demo-24: ## 24-agent-vllm：★ ★ ★ 批处理对照实验（连续批处理调度器）
+	$(MAKE) -C 24-agent-vllm bench
+
 call-14: ## 14-agent-tool：直接调天气工具（不经模型）★
 	$(MAKE) -C 14-agent-tool call
 
@@ -326,6 +347,59 @@ bench-real-22: ## 22-agent-async：★ ★ ★ 并发对照实验（真实天气
 
 modes-22: ## 22-agent-async：★ ★ 四种并发模式说明
 	$(MAKE) -C 22-agent-async modes
+
+# ── 23-agent-batch 专属 ───────────────────────────────────────────────
+#
+# ⚠️ 本地 ONNX 对照实验**必须用 release 构建** ——
+#    debug 构建的推理慢到会淹没批处理的收益差异。
+
+bench-23: ## 23-agent-batch：★ ★ ★ 嵌入批处理对照实验（本地 ONNX）
+	$(MAKE) -C 23-agent-batch bench
+
+bench-rerank-23: ## 23-agent-batch：★ ★ ★ 重排批处理对照实验（本地 ONNX）
+	$(MAKE) -C 23-agent-batch bench-rerank
+
+sweep-23: ## 23-agent-batch：★ ★ ★ 批大小扫描（找最优批大小）
+	$(MAKE) -C 23-agent-batch sweep
+
+bench-remote-23: ## 23-agent-batch：★ ★ 远程 HTTP 对照实验（需 Ollama）
+	$(MAKE) -C 23-agent-batch bench-remote
+
+# ── 24-agent-vllm 专属 ───────────────────────────────────────────────
+#
+# ⚠️ 「真 vLLM」轨需要 **NVIDIA GPU + Linux** ——
+#    vLLM 官方镜像只支持 CUDA，macOS（哪怕是 Apple Silicon）跑不了。
+#    没有 GPU 时用 mock 轨（`make mock-24`）验证客户端与指标口径。
+
+bench-24: ## 24-agent-vllm：★ ★ ★ 三组批处理对照实验（模拟轨，本机可跑）
+	$(MAKE) -C 24-agent-vllm bench
+
+bench-mode-24: ## 24-agent-vllm：★ 实验 A 静态 vs 连续批处理
+	$(MAKE) -C 24-agent-vllm bench-mode
+
+bench-seqs-24: ## 24-agent-vllm：★ 实验 B max_num_seqs 扫描（找甜点）
+	$(MAKE) -C 24-agent-vllm bench-seqs
+
+bench-chunked-24: ## 24-agent-vllm：★ 实验 C chunked prefill 对照
+	$(MAKE) -C 24-agent-vllm bench-chunked
+
+modes-24: ## 24-agent-vllm：★ 两种批处理模式的说明
+	$(MAKE) -C 24-agent-vllm modes
+
+mock-24: ## 24-agent-vllm：启动 mock vLLM（:8000，OpenAI 兼容）
+	$(MAKE) -C 24-agent-vllm mock
+
+health-24: ## 24-agent-vllm：检查 vLLM 服务是否可达
+	$(MAKE) -C 24-agent-vllm health
+
+bench-vllm-24: ## 24-agent-vllm：★ ★ ★ ★ 打真 vLLM 测吞吐
+	$(MAKE) -C 24-agent-vllm bench-vllm
+
+vllm-up-24: ## 24-agent-vllm：启动真 vLLM 容器（需 NVIDIA GPU）
+	$(MAKE) -C 24-agent-vllm docker-up
+
+vllm-down-24: ## 24-agent-vllm：停掉 vLLM 容器
+	$(MAKE) -C 24-agent-vllm docker-down
 
 # ── 21-agent-cache 专属 ───────────────────────────────────────────────
 #

@@ -27,6 +27,8 @@
 20-agent-preformence-analysis 性能瓶颈分析：cProfile / py-spy / Scalene 三工具剖析
 21-agent-cache 手撕 Redis 缓存：缓存 LLM 响应（内容寻址 + 四种控制 + 降级）
 22-agent-async 手撕异步处理：并发工具执行（四档模式 + 限流 + 线程池轨道）
+23-agent-batch 手撕批处理优化（客户端侧）：Embedding / Reranker 批处理（三档策略 + 背压 + 批大小扫描）
+24-agent-vllm 手撕批处理优化（服务端侧）：vLLM continuous batching（GOODPUT / TTFT / 调度器）
 ```
 
 ## 思维导图：整个仓库
@@ -143,6 +145,15 @@ mindmap
         四档并发模式
         限流并发
         三条执行轨道
+      23-agent-batch 批处理 客户端侧
+        三档批策略
+        padding 浪费量化
+        背压三闸门
+        批大小扫描
+      24-agent-vllm 批处理 服务端侧
+        continuous batching
+        GOODPUT 与 TTFT
+        max_num_seqs 调度
     核心认知
       Loader 决定拿到什么
       Splitter 决定能检索什么
@@ -254,12 +265,21 @@ graph TB
         R22["22-agent-async<br/>四档并发模式 · 限流<br/>三条执行轨道"]
     end
 
+    subgraph L20["批处理优化"]
+        R23["23-agent-batch 客户端侧<br/>三档批策略 · padding 量化<br/>背压三闸门 · 批大小扫描"]
+        R24["24-agent-vllm 服务端侧<br/>continuous batching<br/>GOODPUT · TTFT"]
+    end
+
     R18 -.错误决策复用.-> R19
     R8 -.BM25 实现复用.-> R20
     R16 -.Function Calling 复用.-> R21
     R18 -.错误决策复用.-> R22
     R14 -.工具底座复用.-> R22
     R16 -.结构化协议复用.-> R22
+    R5 -.嵌入模型复用.-> R23
+    R8 -.重排模型复用.-> R23
+    R22 -.并发与批处理正交.-> R23
+    R23 -.打包策略互补.-> R24
 
     R4 --> R5 --> R6 --> R7 --> R8 --> R9
     R5 -.向量存储抽象.-> R10
@@ -870,6 +890,8 @@ RUST_LOG=warn,rag_12::retriever=debug  # 只对某个模块开 debug
 | [20-agent-preformence-analysis](20-agent-preformence-analysis/) | 功能对了，但不知道慢在哪 | **三个剖析工具量的不是同一件事（IO 等待 vs CPU 热点）；优化前后差值必须单独用纯净运行测；采样器不是坏了，是程序跑太快** |
 | [21-agent-cache](21-agent-cache/) | 反复问同一个问题，反复付一次模型的钱 | **缓存键必须包含所有影响输出的东西；no-cache 管读、no-store 管写；缓存在关键路径外所以失败只降级不重试；「agentic 必然 miss」不是 exact-match 的固有性质，而是「中间轮不写缓存」造成的（修掉后命中率 0%→100%）** |
 | [22-agent-async](22-agent-async/) | 一轮里的多个工具调用一个接一个等 | **并发执行后结果乱序，回执必须按 call_id 还原输入顺序；同步阻塞的工具塞进 async 会卡死整个事件循环（要 spawn_blocking）；buffer_unordered(0) 会让请求永远挂住；并发 ≠ 并行，CPU 密集任务并发零收益** |
+| [23-agent-batch](23-agent-batch/) | 一条一条地调 embedding / rerank，太慢 | **批处理涨吞吐的同时会抬高单条延迟（实测 17~27 倍），只看总耗时必然误判；固定批里一条长文本拖慢同批所有短文本（padding 浪费 55.6%），要按长度排序分桶；分桶排序会打乱输入顺序，必须按原始下标还原；攒批要有背压三闸门；LangChain 的 batch() 是客户端并行不是合并请求，远程批量是否更快完全取决于上游是否真的并行（Ollama 实测 0.98x）** |
+| [24-agent-vllm](24-agent-vllm/) | 服务端把请求一条条跑，GPU 闲着 | **连续批处理的价值不是「快一点」而是「负载越高差距越大」——GOODPUT 相对静态批处理从 1.7x 放大到 57.8x（静态批处理高负载下 GOODPUT 直接崩到 0.16）；只看吞吐会选出一个延迟不可用的服务（max_num_seqs 64→256 吞吐还在涨，GOODPUT 却从 7.36 掉到 5.28，TPOT 涨 5.4 倍）；长度一致时两种模式完全等价（连续批处理的优势全部来自长度参差）；客户端并发=1 服务端永远攒不出批** |
 
 ## 快速开始
 
@@ -957,6 +979,25 @@ make bench-22                      # ★★ 并发对照实验（模拟负载，
 make bench-real-22                 # ★★ 并发对照实验（真实天气接口）
 make modes-22                      # 四种并发模式说明
 make serve-22                      # 启动 22-agent-async 服务（:3140）
+
+# 23-agent-batch：批处理优化
+make bench-23                      # ★★★ 嵌入批处理对照实验（本地 ONNX）
+make bench-rerank-23               # ★★★ 重排批处理对照实验（本地 ONNX）
+make sweep-23                      # ★★★ 批大小扫描（找最优批大小）
+make bench-remote-23               # ★★ 远程 HTTP 三组对照（需 Ollama）
+make serve-23                      # 启动 23-agent-batch 服务（:3150)
+
+# 24-agent-vllm：批处理优化（服务端侧 · continuous batching）
+make bench-24                      # ★★★ 三组批处理对照实验（模拟轨，本机可跑）
+make bench-mode-24                 # ★★ 实验 A 静态 vs 连续批处理
+make bench-seqs-24                 # ★★ 实验 B max_num_seqs 扫描（找甜点）
+make bench-chunked-24              # ★★ 实验 C chunked prefill 对照
+make modes-24                      # ★★ 两种批处理模式的说明
+make mock-24                       # 启动 mock vLLM（:8000，OpenAI 兼容）
+make health-24                     # 检查 vLLM 服务是否可达
+make bench-vllm-24                 # ★★★ 打真 vLLM 测吞吐
+make vllm-up-24                    # 启动真 vLLM 容器（需 NVIDIA GPU）
+make serve-24                      # 启动 24-agent-vllm 服务（:3160）
 
 # 各模块独立运行
 cargo run -p axum-01                    # HTTP 服务
@@ -1166,6 +1207,8 @@ text[9 + 7..]  →  start byte index 16 is out of bounds for string of length 15
 | 19-agent-summary | 3120 | `make serve-19` |
 | 21-agent-cache | 3130 | `make serve-21` |
 | 22-agent-async | 3140 | `make serve-22` |
+| 23-agent-batch | 3150 | `make serve-23` |
+| 24-agent-vllm | 3160 | `make serve-24` |
 
 ### 常见环境变量前缀
 
@@ -1189,6 +1232,8 @@ text[9 + 7..]  →  start byte index 16 is out of bounds for string of length 15
 | `PERF_` | 20-agent-preformence-analysis | 产物目录 / 剖析工具 / 重复次数 |
 | `CACHE_` | 21-agent-cache | 缓存开关 / TTL / 命名空间 / Redis URL / 工具白名单 |
 | `ASYNC_` | 22-agent-async | 并发上限 / 工具超时 / 重试退避 / 模型配置 |
+| `BATCH_` | 23-agent-batch | 批大小 / 分桶批大小 / 最大等待 / 队列上限 / 并发上限 / 样本条数 |
+| `VLLM_` | 24-agent-vllm | 服务地址 / 模型名 / 并发上限 / 批预算 / chunked prefill / 负载参数 / SLO |
 
 ### 文档维护
 
@@ -1245,4 +1290,7 @@ make check-mermaid    # 校验所有 README 的 mermaid 图能正常渲染
 ㉑ 21-agent-cache 搞懂「重复的活怎么不用重做」
        ↓
 ㉒ 22-agent-async 搞懂「I/O 密集型怎么改成并发」
+㉓ 23-agent-batch 搞懂「批处理为什么快，以及什么时候不该快」
+       ↓
+㉔ 24-agent-vllm 搞懂「服务端怎么批，以及怎么衡量批得好不好」
 ```

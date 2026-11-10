@@ -263,6 +263,43 @@ dependencies = [
 ]
 
 [[package]]
+name = "agent-23"
+version = "0.1.0"
+dependencies = [
+ "agent-logging",
+ "anyhow",
+ "axum",
+ "fastembed",
+ "futures",
+ "rag-05",
+ "rag-08",
+ "reqwest 0.11.27",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "tower",
+ "tower-http",
+]
+
+[[package]]
+name = "agent-24"
+version = "0.1.0"
+dependencies = [
+ "agent-logging",
+ "anyhow",
+ "axum",
+ "futures",
+ "reqwest 0.11.27",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "tower",
+ "tower-http",
+]
+
+[[package]]
 name = "agent-logging"
 version = "0.1.0"
 dependencies = [

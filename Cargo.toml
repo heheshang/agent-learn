@@ -24,6 +24,8 @@ members = [
     "20-agent-preformence-analysis",
     "21-agent-cache",
     "22-agent-async",
+    "23-agent-batch",
+    "24-agent-vllm",
 ]
 
 # 所有成员 crate 的依赖都在这里统一定义，成员用 `dep = { workspace = true }` 引用。

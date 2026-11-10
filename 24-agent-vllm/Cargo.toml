@@ -1,0 +1,34 @@
+[package]
+name = "agent-24"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+agent-logging = { path = "../00-logging" }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+
+# ── HTTP API 层 ──────────────────────────────────────────────────────
+#
+# 本项目**同时**扮演两个角色：
+# 1. 压测客户端（打真 vLLM / mock vLLM 的 OpenAI 兼容接口）
+# 2. mock vLLM 服务端（内置的 continuous batching 调度器）
+axum = { workspace = true }
+tower-http = { workspace = true }
+
+# tower：测试里用 `ServiceExt::oneshot` 直接调 axum 路由（不开端口）。
+tower = { workspace = true }
+
+# HTTP 客户端：打真 vLLM（Docker 里的 8000 端口）。
+reqwest = { workspace = true }
+
+# ── 压测并发原语 ──────────────────────────────────────────────────────
+#
+# `buffer_unordered(n)` —— 限流并发地发请求。
+#
+# ⚠️ 为什么用「就地组合」而不是 `tokio::spawn`：
+#    `spawn` 要求 future 是 `'static`，而这里要借用 `&client` 与 `&requests`。
+futures = { workspace = true }
